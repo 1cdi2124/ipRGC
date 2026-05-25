@@ -1,11 +1,11 @@
 % ================================================================= %
-% 3差分解析スクリプト（修正版：複素数・レンジ最適化）
+% 3差分解析スクリプト 眼球運動成分を消す　(160hz-緑なし)
 % ================================================================= %
 
 % 1. ファイル選択
 [file_led, path_led] = uigetfile('*.mat', '【1/2】LEDあり（80Hz等）の.matを選択');
 if isequal(file_led, 0), return; end
-[file_noled, path_noled] = uigetfile('*.mat', '【2/2】LEDなし（0Hz等）の.matを選択', path_led);
+[file_noled, path_noled] = uigetfile('*.mat', '【2/2】LEDなし（緑なし）の.matを選択', path_led);
 if isequal(file_noled, 0), return; end
 
 % 2. データのロード
