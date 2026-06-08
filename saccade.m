@@ -3,8 +3,8 @@
 % 処理フロー:
 % 1. 生データの読み込みとクリーニング
 % 2. 検出用の一時複製データ(EEG_filt)の作成とフィルタリング(0.5-30Hz)
-% 3. 一時データを用いた6段階の品質ゲート評価とサッカード振幅頂点の割り出し
-% 4. 割り出したイベント情報を元の生データ(EEG)へ登録
+% 3. 一時データを用いた6段階の品質ゲート評価
+% 4. 速度ピークから遡り,速度がピークの5%を下回る点を「開始地点(Onset)」として元データへ登録
 % 5. 生データ(.set)の保存 (CWTなどの広帯域解析へ接続可能)
 % =================================================================
 
@@ -94,7 +94,7 @@ for f = 1:length(files)
         fprintf('  警告: フィルタリングに失敗. 生データで続行する. 詳細: %s\n', ME.message);
     end
     
-    % --- ステップ3: フィルター適用済みのデータを使ってサッカードの位置を割り出す ---
+    % --- ステップ3: フィルター適用済みのデータを使ってサッカードの速度ピークを割り出す ---
     eog_data_filt = EEG_filt.data(eog_chan_idx, :); 
     eeg_data_filt = EEG_filt.data(eeg_chan_indices, :);
     
@@ -205,27 +205,24 @@ for f = 1:length(files)
     
     fprintf('  有効なサッカード数: %d\n', length(valid_peaks));
     
-    % --- ステップ4: イベント情報を「元の生データ(EEG)」に書き込む ---
+    % --- ステップ4: イベント情報(Onset)を「元の生データ(EEG)」に書き込む ---
     EEG.event = [];
     if ~isempty(valid_peaks)
         for i = 1:length(valid_peaks)
             p = valid_peaks(i);
+            peak_vel = abs_vel(p);
+            p_onset = p;
             
-            search_start = p;
-            search_end = min(length(eog_data_filt), p + cooldown_samples);
-            trigger_vel = eog_vel(p);
+            % 最大100ms遡り,速度がピークの5%を下回った地点をOnset(開始地点)とする
+            max_lookback = round(0.1 * srate); 
             
-            if trigger_vel > 0
-                [~, local_peak_rel_idx] = max(eog_data_filt(search_start:search_end));
-            else
-                [~, local_peak_rel_idx] = min(eog_data_filt(search_start:search_end));
+            while p_onset > max(1, p - max_lookback) && abs_vel(p_onset) > 0.05 * peak_vel
+                p_onset = p_onset - 1;
             end
             
-            amp_peak_idx = search_start + local_peak_rel_idx - 1;
-            
-            % オリジナルのEEG構造体にイベントを追加
+            % オリジナルの生データEEG構造体にイベントを追加
             EEG.event(i).type = 'Saccade';
-            EEG.event(i).latency = amp_peak_idx;
+            EEG.event(i).latency = p_onset;
         end
         EEG = eeg_checkset(EEG, 'eventconsistency');
     end
@@ -249,7 +246,7 @@ for f = 1:length(files)
             line([EEG.times(EEG.event(p).latency) EEG.times(EEG.event(p).latency)], ylim, 'Color', 'r', 'LineWidth', 1.2);
         end
     end
-    title('Filtered EOG Amplitude with Detected Saccade Amplitude Peaks');
+    title('Filtered EOG Amplitude with Detected Saccade Onsets');
     ylabel('Amplitude (uV)'); xlabel('Time (ms)'); grid on;
     
     save_fig_filename = fullfile(output_dir, [base_name, '.png']);
@@ -261,4 +258,4 @@ for f = 1:length(files)
     save_filename = [base_name '.set'];
     EEG = pop_saveset(EEG, 'filename', save_filename, 'filepath', output_dir, 'savemode', 'onefile');
 end
-fprintf('\n=== 全データの検出および【生データへのイベント登録】が完了した ===\n');
+fprintf('\n=== 全データの検出および【生データへのOnsetイベント登録】が完了した ===\n');
