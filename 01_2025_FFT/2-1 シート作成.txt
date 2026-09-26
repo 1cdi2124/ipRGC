@@ -1,0 +1,48 @@
+Sub Create6SheetsAndSetHeaders()
+
+    Dim i As Integer
+    Dim j As Long
+    Dim ws As Worksheet
+
+    Dim sheetNames As Variant
+    Dim headers1 As Variant
+    Dim headers6 As Variant
+
+    ' シート名
+    sheetNames = Array("PO7", "O1", "Oz", "O2", "PO8", "平均")
+
+    ' 最初の5シート用ヘッダー
+    headers1 = Array("周波数", "O0Hz", "O100Hz", "O200Hz", "X100Hz", "X200Hz", "100-0", "200-0")
+
+    ' 6つ目のシート用ヘッダー
+    headers6 = Array( _
+        "周波数", _
+        "100-0", "PO7", "O1", "Oz", "O2", "PO8", "平均", _
+        "", _
+        "200-0", "PO7", "O1", "Oz", "O2", "PO8", "平均" _
+    )
+
+    For i = 0 To 5
+        Set ws = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+
+        ' シート名を設定（1004対策）
+        On Error Resume Next
+        ws.Name = sheetNames(i)
+        On Error GoTo 0
+
+        ' ヘッダー設定
+        If i < 5 Then
+            ws.Range("A1").Resize(1, UBound(headers1) + 1).Value = headers1
+        Else
+            ws.Range("A1").Resize(1, UBound(headers6) + 1).Value = headers6
+        End If
+
+        ' 周波数列（A列）に 0 ～ 1000
+        For j = 0 To 1000
+            ws.Cells(j + 2, 1).Value = j
+        Next j
+    Next i
+
+End Sub
+
+

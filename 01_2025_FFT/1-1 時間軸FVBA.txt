@@ -1,0 +1,51 @@
+Sub CopySheetCalculateAndChart()
+
+    Dim wsSrc As Worksheet
+    Dim wsDest As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim cht As ChartObject
+    
+    '=== 元シートコピー ======================
+    Set wsSrc = ActiveSheet
+    wsSrc.Copy After:=wsSrc
+    Set wsDest = ActiveSheet   'コピーされた新しいシート
+    
+    '=== 計算処理（A列5行目以下 → M列へ） ====
+    lastRow = wsDest.Cells(wsDest.Rows.Count, "A").End(xlUp).Row
+    
+    For i = 5 To lastRow
+        If IsNumeric(wsDest.Cells(i, "A").Value) Then
+            wsDest.Cells(i, "M").Value = wsDest.Cells(i, "A").Value * 0.0005
+        Else
+            wsDest.Cells(i, "M").Value = ""
+        End If
+    Next i
+
+    '=== グラフ作成 ==========================
+    '既存のグラフ削除（必要なら）
+    For Each cht In wsDest.ChartObjects
+        cht.Delete
+    Next
+    
+    '折れ線グラフを作成（標準スタイル）
+    Set cht = wsDest.ChartObjects.Add( _
+        Left:=wsDest.Range("O5").Left, _
+        Top:=wsDest.Range("O5").Top, _
+        Width:=400, _
+        Height:=250)
+    
+    cht.Chart.ChartType = xlLine
+    
+    'J列（5行〜最終行）
+    With cht.Chart.SeriesCollection.NewSeries
+        .Values = wsDest.Range("J5:J" & lastRow)
+        .XValues = wsDest.Range("A5:A" & lastRow)
+    End With
+    
+    'タイトルなし
+    cht.Chart.HasTitle = False
+
+    MsgBox "コピー・計算・グラフ作成（標準スタイル）が完了しました！"
+
+End Sub

@@ -1,0 +1,73 @@
+Sub CalcAndMakeGraphs_5Sheets_Vertical()
+
+    Dim ws As Worksheet
+    Dim sheetNames As Variant
+    Dim r As Long
+    Dim lastRow As Long
+    Dim col As Integer
+    Dim cht As ChartObject
+    Dim startLeft As Double
+    Dim startTop As Double
+    Dim graphHeight As Double
+    Dim graphWidth As Double
+    Dim i As Integer
+
+    ' 対象シート名
+    sheetNames = Array("PO7", "O1", "Oz", "O2", "PO8")
+
+    For i = LBound(sheetNames) To UBound(sheetNames)
+
+        Set ws = ThisWorkbook.Worksheets(sheetNames(i))
+
+        ' データ最終行（B列基準）
+        lastRow = ws.Cells(ws.Rows.Count, 2).End(xlUp).Row
+
+        ' ==== 計算 ====
+        For r = 2 To lastRow
+            ws.Cells(r, 7).Value = ws.Cells(r, 3).Value - ws.Cells(r, 2).Value ' 100-0
+            ws.Cells(r, 8).Value = ws.Cells(r, 4).Value - ws.Cells(r, 2).Value ' 200-0
+        Next r
+
+        ' ==== 既存グラフ削除 ====
+        For Each cht In ws.ChartObjects
+            cht.Delete
+        Next cht
+
+        ' グラフ配置設定
+        startLeft = ws.Range("J2").Left
+        startTop = ws.Range("J2").Top
+        graphWidth = 350
+        graphHeight = 220
+
+        ' ==== グラフ作成（B～H列 → 7本） ====
+        For col = 2 To 8
+
+            Set cht = ws.ChartObjects.Add( _
+                Left:=startLeft, _
+                Top:=startTop + (col - 2) * graphHeight, _
+                Width:=graphWidth, _
+                Height:=graphHeight _
+            )
+
+            With cht.Chart
+                .ChartType = xlLine
+
+                .SeriesCollection.NewSeries
+                .SeriesCollection(1).Values = ws.Range(ws.Cells(2, col), ws.Cells(lastRow, col))
+                .SeriesCollection(1).Name = ws.Cells(1, col).Value
+
+                ' 縦軸固定
+                With .Axes(xlValue)
+                    .MinimumScale = -0.05
+                    .MaximumScale = 0.05
+                End With
+
+                .HasTitle = True
+                .ChartTitle.Text = ws.Cells(1, col).Value
+            End With
+
+        Next col
+
+    Next i
+
+End Sub

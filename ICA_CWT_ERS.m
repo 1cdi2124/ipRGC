@@ -22,7 +22,7 @@ ica_chans = 1:8;
 epoch_window = [-0.3, 0.4]; 
 baseline_window = [-250, -100]; 
 freq_range = [0 200]; 
-brain_threshold = 0.5;
+brain_threshold = 0.7;
 
 % 高解像度（粒）の設定
 n_freqs = 100;     % 周波数ステップ数（縦の細かさ）
@@ -64,10 +64,20 @@ try
         EEG = pop_chanedit(EEG, 'lookup','standard-10-5-cap385.elp');
         
         fprintf('  Removing 1 channel(s)...\n'); 
-% =================================================================
-        rng(3, 'twister'); % シード値
-% =================================================================
-        evalc('EEG = pop_runica(EEG, ''icatype'', ''runica'', ''chanind'', ica_chans, ''extended'', 1);');
+        % =================================================================
+                % シード値の設定（どちらか一方を有効にする）
+                %rng(5, 'twister'); % シード値指定の場合
+                rng('shuffle');   % ランダム（シャッフル）の場合
+                
+                % 現在適用されている実際の乱数シードの情報を取得
+                rng_state = rng;
+                if isfield(rng_state, 'Seed')
+                    current_seed_str = num2str(rng_state.Seed);
+                else
+                    current_seed_str = 'unknown';
+                end
+        % =================================================================
+                evalc('EEG = pop_runica(EEG, ''icatype'', ''runica'', ''chanind'', ica_chans, ''extended'', 1);');
         
         if exist('pop_iclabel', 'file')
             EEG_for_label = pop_select(EEG, 'channel', ica_chans);
@@ -141,7 +151,9 @@ try
                 'erspmax', ersp_limit, 'itcmax', itc_limit, ...
                 'plotersp', 'on', 'plotitc', 'on', 'title', ''); 
             
-            sgtitle([base_name ' : ' this_chan ' (ERSP / ITC / ERS)'], 'FontSize', 17, 'FontWeight', 'bold', 'Interpreter', 'none');
+            % --- タイトルの末尾にシード値を動的に追加 ---
+            title_str = [base_name ' : ' this_chan ' (ERSP / ITC / ERS) [Seed: ' current_seed_str ']'];
+            sgtitle(title_str, 'FontSize', 17, 'FontWeight', 'bold', 'Interpreter', 'none');
             
             all_ax = findobj(fig_ersp_itc, 'Type', 'Axes');
             set(all_ax, 'FontSize', 12, 'FontWeight', 'bold'); 
@@ -248,9 +260,10 @@ try
             end
 
             % =================================================================
-            % データの保存 (ERSP, ITC, ERS をすべて格納)
+            % データの保存 (ERSP, ITC, ERS と同時にシード値も格納して証拠の追跡性を確保)
             % =================================================================
-            save(fullfile(chan_dir, [base_name '_' this_chan '.mat']), 'ersp', 'itc', 'ers', 'powbase', 'times', 'freqs');
+            analysis_seed = current_seed_str; % 変数として保存用に退避
+            save(fullfile(chan_dir, [base_name '_' this_chan '.mat']), 'ersp', 'itc', 'ers', 'powbase', 'times', 'freqs', 'analysis_seed');
             
             if c == 1
                 pop_saveset(EEG, 'filename', [base_name '_Final.set'], 'filepath', chan_dir);

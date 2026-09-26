@@ -1,0 +1,68 @@
+%% ============================
+% Excel → FFT → 1Hzパワー出力 → CSV保存（複数チャンネル）
+%% ============================
+
+% --- Excel設定 -------------------------------
+filename = 'takeiO0Hz.xlsm';  
+sheet = 2;                   
+range = 'B5:F1000000';       % B～F列
+
+% --- サンプリングレート設定 ------------------
+fs = 2000;  % サンプリング周波数 [Hz]
+
+%% 1. Excelデータを読み込む
+raw = readmatrix(filename, 'Sheet', sheet, 'Range', range);
+data = raw(~isnan(raw));     % NaN削除
+data = raw;                  % 各列ごとに処理するので元のrawを使用
+
+[nSamples, nChannels] = size(data);
+
+%% 2. FFT実行（1Hz刻みパワースペクトル）
+freqs_1Hz = 0:1:floor(fs/2);  % 最大周波数はNyquist周波数
+power_1Hz_all = zeros(length(freqs_1Hz), nChannels);
+
+for ch = 1:nChannels
+    x = data(:,ch);
+    x = x(~isnan(x));       % 欠損値削除
+    N = length(x);
+    
+    Y = fft(x);
+    P2 = abs(Y/N);
+    P1 = P2(1:floor(N/2)+1);
+    P1(2:end-1) = 2*P1(2:end-1);
+    
+    power = P1.^2;
+    f = fs * (0:floor(N/2)) / N;
+    
+    % 1Hzごとの平均パワー
+    for i = 1:length(freqs_1Hz)
+        idx = round(f) == freqs_1Hz(i);
+        if any(idx)
+            power_1Hz_all(i,ch) = mean(power(idx));
+        end
+    end
+end
+
+%% 3. 表としてまとめる
+channel_names = {'PO7','O1','Oz','O2','PO8'};
+Result = array2table(power_1Hz_all, 'VariableNames', channel_names);
+Result = addvars(Result, freqs_1Hz.', 'Before', 1, 'NewVariableNames', 'Frequency_Hz');
+
+disp(Result);
+
+%% 4. CSV保存
+csv_filename = 'FFT_1Hz_Power_MultiChannel.csv';
+writetable(Result, csv_filename);
+disp(['CSV saved as: ', csv_filename]);
+
+%% 5. グラフ表示（任意、チャンネルごとに色分け）
+figure; hold on;
+colors = lines(nChannels);
+for ch = 1:nChannels
+    plot(freqs_1Hz, power_1Hz_all(:,ch), 'Color', colors(ch,:), 'LineWidth', 1.5);
+end
+xlabel('Frequency (Hz)','FontSize',12);
+ylabel('Power','FontSize',12);
+title('1 Hz Power Spectrum (Multi-Channel)','FontSize',14);
+grid on;
+legend(channel_names);

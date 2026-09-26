@@ -1,0 +1,84 @@
+Sub DeleteRowsBetweenMultipleValues()
+
+    Dim ws As Worksheet
+    Dim lastRow As Long
+    Dim i As Long
+    Dim currentValue As Variant
+    Dim firstPos As Object 'Scripting.Dictionary
+    Dim key As Variant
+    Dim cht As ChartObject
+    
+    Set ws = ActiveSheet
+    lastRow = ws.Cells(ws.Rows.Count, "N").End(xlUp).Row
+    
+    '最初の位置を記録する辞書
+    Set firstPos = CreateObject("Scripting.Dictionary")
+    
+    '★1行目から順にチェック
+    For i = 1 To lastRow
+
+        currentValue = ws.Cells(i, "N").Value
+
+        '空白はスキップ
+        If currentValue <> "" Then
+
+            '■初回出現なら記録
+            If Not firstPos.Exists(currentValue) Then
+                firstPos(currentValue) = i
+
+            '■2回目の出現 → 間の行を削除
+            Else
+                Dim firstRow As Long, secondRow As Long
+                
+                firstRow = firstPos(currentValue)
+                secondRow = i
+                
+                '間に行がある場合だけ削除
+                If secondRow - firstRow > 1 Then
+                    ws.Rows(firstRow + 1 & ":" & secondRow - 1).Delete
+                End If
+                
+                '削除後は行番号が変わるので調整
+                i = firstRow + 1
+                lastRow = ws.Cells(ws.Rows.Count, "N").End(xlUp).Row
+                
+                '再度同じ値(Aなど)の次のペアを探すため初期化
+                firstPos.Remove currentValue
+            End If
+
+        End If
+    Next i
+
+    '-----------------------------------------
+    ' ここからグラフ作成処理
+    '-----------------------------------------
+
+    '既存グラフ削除
+    For Each cht In ws.ChartObjects
+        cht.Delete
+    Next
+    
+    '折れ線グラフを作成（標準スタイル）
+    Set cht = ws.ChartObjects.Add( _
+        Left:=ws.Range("O5").Left, _
+        Top:=ws.Range("O5").Top, _
+        Width:=400, _
+        Height:=250)
+    
+    cht.Chart.ChartType = xlLine
+    
+    '行数を再取得（削除後に変わるため）
+    lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+    
+    'J列の折れ線グラフ（横軸：A列）
+    With cht.Chart.SeriesCollection.NewSeries
+        .Values = ws.Range("J5:J" & lastRow)
+        .XValues = ws.Range("M5:M" & lastRow)
+    End With
+    
+    'タイトルなし
+    cht.Chart.HasTitle = False
+
+    MsgBox "削除とグラフ作成が完了しました"
+
+End Sub

@@ -1,0 +1,336 @@
+function [analysis_long, quality_control, output_files] = ...
+        export_joint_ica_cwt_band_anova(input_root, output_dir, ...
+        time_window_ms, channels, bands)
+%EXPORT_JOINT_ICA_CWT_BAND_ANOVA Export repeated-measures ANOVA tables.
+% Source: run_joint_ica_cwt_band_analysis.m output under
+%         each session's 06_バンド帯_共通ICA/<channel> folder.
+%
+% Example (one experimental cohort, 0-300 ms):
+%   export_joint_ica_cwt_band_anova("C:\...\one_experiment")
+% Example (explicitly select one session per participant):
+%   sessions = ["C:\...\subjectA_01", "C:\...\subjectB_02"];
+%   export_joint_ica_cwt_band_anova(sessions, "C:\...\ANOVA", [0 300]);
+%
+% The dependent variable is the unweighted mean of MeanERSPdB across
+% time points in the inclusive window. One participant contributes one
+% value per condition x band x channel. Condition is exported separately;
+% band and channel are within-participant factors. Single time points or
+% trials must not be treated as independent participants.
+
+    if nargin < 1 || isempty(input_root)
+        selected = uigetdir('', '同じ実験の被験者フォルダを含む場所を選択');
+        if isequal(selected, 0)
+            error('export_joint_ica_cwt_band_anova:Cancelled', ...
+                'フォルダ選択を中止しました。');
+        end
+        input_root = string(selected);
+    else
+        input_root = string(input_root);
+        input_root = input_root(:);
+    end
+    if nargin < 3 || isempty(time_window_ms)
+        time_window_ms = [0 300];
+    end
+    validateattributes(time_window_ms, {'numeric'}, ...
+        {'real', 'finite', 'numel', 2, 'increasing'}, ...
+        mfilename, 'time_window_ms');
+    time_window_ms = double(time_window_ms(:)');
+    if nargin < 4 || isempty(channels)
+        channels = ["F3", "F4", "Fz", "O1", "O2", ...
+            "Oz", "PO7", "PO8"];
+    end
+    if nargin < 5 || isempty(bands)
+        bands = ["Delta", "Theta", "Alpha", "Beta", ...
+            "LowGamma", "HighGamma_61_100", ...
+            "HighGamma_101_150", "HighGamma_151_200"];
+    end
+    channels = string(channels(:)');
+    bands = string(bands(:)');
+    if numel(unique(channels)) ~= numel(channels) || ...
+            numel(unique(bands)) ~= numel(bands)
+        error('export_joint_ica_cwt_band_anova:DuplicateFactors', ...
+            'channelsとbandsには重複しない名前を指定してください。');
+    end
+
+    [session_folders, cohort_root] = find_session_folders(input_root);
+    if nargin < 2 || isempty(output_dir)
+        output_dir = fullfile(cohort_root, ...
+            '07_ANOVA_バンド帯_チャンネル');
+    end
+    output_dir = string(output_dir);
+    participant_ids = strings(numel(session_folders), 1);
+    session_ids = strings(numel(session_folders), 1);
+    for session_index = 1:numel(session_folders)
+        [~, session_name] = fileparts(session_folders(session_index));
+        session_ids(session_index) = string(session_name);
+        participant_ids(session_index) = extractBefore( ...
+            session_ids(session_index) + "_", "_");
+    end
+    [unique_participants, ~, participant_index] = ...
+        unique(participant_ids);
+    counts = accumarray(participant_index, 1);
+    repeated = unique_participants(counts > 1);
+    if ~isempty(repeated)
+        error('export_joint_ica_cwt_band_anova:RepeatedParticipant', ...
+            ['同一被験者の複数セッションを検出: %s。' ...
+             '各被験者から採用する1セッションだけを' ...
+             'input_rootの文字列配列に指定してください。'], ...
+            strjoin(repeated, ', '));
+    end
+
+    all_cells = empty_cell_table();
+    reference_times = [];
+    for session_index = 1:numel(session_folders)
+        band_root = fullfile(session_folders(session_index), ...
+            '06_バンド帯_共通ICA');
+        files = dir(fullfile(band_root, '*', ...
+            '*_共通ICA_帯域ERSP.csv'));
+        if isempty(files)
+            error('export_joint_ica_cwt_band_anova:NoBandCSV', ...
+                '帯域ERSPのCSVが見つかりません: %s', band_root);
+        end
+        for file_index = 1:numel(files)
+            file_path = string(fullfile( ...
+                files(file_index).folder, files(file_index).name));
+            [~, channel_folder] = fileparts(files(file_index).folder);
+            if ~ismember(string(channel_folder), channels)
+                continue;
+            end
+            source = readtable(file_path, 'TextType', 'string', ...
+                'Encoding', 'UTF-8');
+            required = ["SourceSET", "Condition", "Channel", ...
+                "Band", "TimeMs", "MeanERSPdB", "TrialCount"];
+            if ~all(ismember(required, ...
+                    string(source.Properties.VariableNames)))
+                error('export_joint_ica_cwt_band_anova:UnexpectedCSV', ...
+                    '必要な列がありません: %s', file_path);
+            end
+            conditions = unique(source.Condition);
+            source_channels = unique(source.Channel);
+            if numel(conditions) ~= 1 || ...
+                    numel(source_channels) ~= 1 || ...
+                    source_channels ~= string(channel_folder)
+                error('export_joint_ica_cwt_band_anova:MixedCSV', ...
+                    '条件またはチャンネルが混在しています: %s', file_path);
+            end
+            for band_index = 1:numel(bands)
+                selected = source.Band == bands(band_index) & ...
+                    source.TimeMs >= time_window_ms(1) & ...
+                    source.TimeMs <= time_window_ms(2);
+                values = double(source.MeanERSPdB(selected));
+                selected_times = double(source.TimeMs(selected));
+                if numel(unique(selected_times)) ~= numel(selected_times)
+                    error('export_joint_ica_cwt_band_anova:DuplicateTime', ...
+                        '同じ時間点が重複しています: %s', file_path);
+                end
+                if isempty(reference_times) && ~isempty(selected_times)
+                    reference_times = selected_times;
+                elseif ~isempty(selected_times) && ...
+                        ~isequal(selected_times, reference_times)
+                    error('export_joint_ica_cwt_band_anova:TimeAxisMismatch', ...
+                        '時間軸が他のCSVと異なります: %s', file_path);
+                end
+                if isempty(values) || any(~isfinite(values))
+                    mean_db = NaN;
+                else
+                    mean_db = mean(values);
+                end
+                trial_counts = double(source.TrialCount(selected));
+                if isempty(trial_counts) || ...
+                        any(~isfinite(trial_counts))
+                    minimum_trials = NaN;
+                else
+                    minimum_trials = min(trial_counts);
+                end
+                row = table(participant_ids(session_index), ...
+                    session_ids(session_index), conditions, ...
+                    bands(band_index), string(channel_folder), ...
+                    mean_db, numel(values), minimum_trials, ...
+                    time_window_ms(1), time_window_ms(2), file_path, ...
+                    'VariableNames', all_cells.Properties.VariableNames);
+                all_cells = [all_cells; row]; %#ok<AGROW>
+            end
+        end
+    end
+    if isempty(all_cells)
+        error('export_joint_ica_cwt_band_anova:NoSelectedCells', ...
+            '指定されたチャンネルの帯域ERSP CSVがありません。');
+    end
+    if isempty(reference_times)
+        error('export_joint_ica_cwt_band_anova:EmptyTimeWindow', ...
+            '指定した時間窓に該当するデータ点がありません。');
+    end
+
+    conditions = unique(all_cells.Condition, 'stable');
+    quality_control = table();
+    analysis_long = empty_cell_table();
+    output_files = strings(0, 1);
+    if ~isfolder(output_dir)
+        [created, message] = mkdir(output_dir);
+        if ~created
+            error('export_joint_ica_cwt_band_anova:CreateFolder', ...
+                '出力先を作成できません: %s (%s)', output_dir, message);
+        end
+    end
+    for condition_index = 1:numel(conditions)
+        condition = conditions(condition_index);
+        wide = table();
+        for session_index = 1:numel(session_folders)
+            selected_cells = all_cells( ...
+                all_cells.ParticipantID == participant_ids(session_index) & ...
+                all_cells.Condition == condition, :);
+            [is_complete, missing_cells] = check_complete_cells( ...
+                selected_cells, bands, channels, numel(reference_times));
+            qc_row = table(participant_ids(session_index), ...
+                session_ids(session_index), condition, is_complete, ...
+                height(selected_cells), numel(bands) * numel(channels), ...
+                strjoin(missing_cells, '; '), ...
+                'VariableNames', {'ParticipantID', 'SessionID', ...
+                'Condition', 'Included', 'ObservedCells', ...
+                'ExpectedCells', 'MissingOrInvalidCells'});
+            quality_control = [quality_control; qc_row]; %#ok<AGROW>
+            if ~is_complete
+                continue;
+            end
+            analysis_long = [analysis_long; selected_cells]; %#ok<AGROW>
+            wide_row = table(participant_ids(session_index), ...
+                session_ids(session_index), condition, ...
+                'VariableNames', {'ParticipantID', 'SessionID', ...
+                'Condition'});
+            for band_index = 1:numel(bands)
+                for channel_index = 1:numel(channels)
+                    factor_name = bands(band_index) + "_" + ...
+                        channels(channel_index);
+                    match = selected_cells.Band == bands(band_index) & ...
+                        selected_cells.Channel == channels(channel_index);
+                    wide_row.(factor_name) = selected_cells.ERSPdB(match);
+                end
+            end
+            wide = [wide; wide_row]; %#ok<AGROW>
+        end
+        if ~isempty(wide)
+            file_tag = regexprep(strtrim(condition), ...
+                '[<>:"/\\|?*\s]', '_');
+            file_tag = regexprep(file_tag, '_+', '_');
+            wide_path = fullfile(output_dir, ...
+                "ANOVA_wide_" + condition_index + "_" + ...
+                file_tag + ".csv");
+            writetable(wide, wide_path, 'Encoding', 'UTF-8');
+            output_files(end + 1, 1) = wide_path; %#ok<AGROW>
+        end
+    end
+    design = table('Size', [0 5], ...
+        'VariableTypes', {'string', 'string', 'string', ...
+        'double', 'double'}, ...
+        'VariableNames', {'Variable', 'Band', 'Channel', ...
+        'BandOrder', 'ChannelOrder'});
+    for band_index = 1:numel(bands)
+        for channel_index = 1:numel(channels)
+            design(end + 1, :) = { ...
+                bands(band_index) + "_" + channels(channel_index), ...
+                bands(band_index), channels(channel_index), ...
+                band_index, channel_index}; %#ok<AGROW>
+        end
+    end
+    cell_path = fullfile(output_dir, 'ANOVA_all_cells_QC.csv');
+    long_path = fullfile(output_dir, 'ANOVA_long_complete.csv');
+    qc_path = fullfile(output_dir, 'ANOVA_inclusion_QC.csv');
+    design_path = fullfile(output_dir, 'ANOVA_factor_design.csv');
+    writetable(all_cells, cell_path, 'Encoding', 'UTF-8');
+    writetable(analysis_long, long_path, 'Encoding', 'UTF-8');
+    writetable(quality_control, qc_path, 'Encoding', 'UTF-8');
+    writetable(design, design_path, 'Encoding', 'UTF-8');
+    output_files = [cell_path; long_path; qc_path; design_path; ...
+        output_files];
+    fprintf('保存先: %s\n', output_dir);
+    fprintf('完全な被験者×条件: %d / %d\n', ...
+        sum(quality_control.Included), height(quality_control));
+    fprintf('時間窓: %.1f–%.1f ms（%d点）\n', ...
+        time_window_ms, numel(reference_times));
+end
+
+function [session_folders, cohort_root] = find_session_folders(input_root)
+    if any(~isfolder(input_root))
+        error('export_joint_ica_cwt_band_anova:MissingInput', ...
+            '指定された入力フォルダが見つかりません。');
+    end
+    if isscalar(input_root) && ...
+            isfolder(fullfile(input_root, '06_バンド帯_共通ICA'))
+        session_folders = input_root;
+        cohort_root = string(fileparts(input_root));
+        return;
+    end
+    if numel(input_root) > 1
+        session_folders = input_root;
+        parents = strings(numel(input_root), 1);
+        for index = 1:numel(input_root)
+            parents(index) = string(fileparts(input_root(index)));
+            if ~isfolder(fullfile(input_root(index), ...
+                    '06_バンド帯_共通ICA'))
+                error('export_joint_ica_cwt_band_anova:MissingBandFolder', ...
+                    '06_バンド帯_共通ICAがありません: %s', input_root(index));
+            end
+        end
+        if numel(unique(parents)) ~= 1
+            error('export_joint_ica_cwt_band_anova:MixedCohorts', ...
+                '異なる実験フォルダのセッションを混ぜないでください。');
+        end
+        cohort_root = parents(1);
+        return;
+    end
+    found = dir(fullfile(input_root, '**', '06_バンド帯_共通ICA'));
+    found = found([found.isdir]);
+    if isempty(found)
+        error('export_joint_ica_cwt_band_anova:NoBandFolders', ...
+            '配下に06_バンド帯_共通ICAが見つかりません。');
+    end
+    session_folders = strings(numel(found), 1);
+    parents = strings(numel(found), 1);
+    for index = 1:numel(found)
+        session_folders(index) = string(found(index).folder);
+        parents(index) = string(fileparts(found(index).folder));
+    end
+    if numel(unique(parents)) ~= 1
+        error('export_joint_ica_cwt_band_anova:MixedCohorts', ...
+            ['入力先に複数の実験フォルダが含まれます。' ...
+             '同一実験のフォルダを1つ指定してください。']);
+    end
+    cohort_root = parents(1);
+end
+
+function cells = empty_cell_table()
+    cells = table('Size', [0 11], ...
+        'VariableTypes', {'string', 'string', 'string', ...
+        'string', 'string', 'double', 'double', 'double', ...
+        'double', 'double', 'string'}, ...
+        'VariableNames', {'ParticipantID', 'SessionID', ...
+        'Condition', 'Band', 'Channel', 'ERSPdB', ...
+        'TimePointCount', 'MinimumTrialCount', ...
+        'WindowStartMs', 'WindowEndMs', 'SourceCSV'});
+end
+
+function [is_complete, missing] = check_complete_cells( ...
+        cells, bands, channels, expected_time_points)
+    missing = strings(0, 1);
+    for band_index = 1:numel(bands)
+        for channel_index = 1:numel(channels)
+            selected = cells.Band == bands(band_index) & ...
+                cells.Channel == channels(channel_index);
+            cell_index = find(selected);
+            if numel(cell_index) ~= 1
+                missing(end + 1, 1) = bands(band_index) + "_" + ...
+                    channels(channel_index); %#ok<AGROW>
+                continue;
+            end
+            if ~isfinite(cells.ERSPdB(cell_index)) || ...
+                    cells.TimePointCount(cell_index) ~= ...
+                        expected_time_points || ...
+                    ~isfinite(cells.MinimumTrialCount(cell_index)) || ...
+                    cells.MinimumTrialCount(cell_index) < 1
+                missing(end + 1, 1) = bands(band_index) + "_" + ...
+                    channels(channel_index); %#ok<AGROW>
+            end
+        end
+    end
+    is_complete = isempty(missing);
+end

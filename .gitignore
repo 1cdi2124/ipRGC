@@ -1,0 +1,10 @@
+# Local system files and generated development environments
+.git/
+desktop.ini
+Thumbs.db
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+venv/
+node_modules/
