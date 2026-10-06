@@ -2,14 +2,11 @@ function [analysis_long, quality_control, output_files] = ...
         export_joint_ica_cwt_band_anova(input_root, output_dir, ...
         time_window_ms, channels, bands)
 %EXPORT_JOINT_ICA_CWT_BAND_ANOVA Export repeated-measures ANOVA tables.
-% Source: each session's 06_バンド帯_共通ICA or
-%         06_バンド帯_共通ICA_newtimef_全帯域 folder.
+% Source: run_joint_ica_cwt_band_analysis.m output under
+%         each session's 06_バンド帯_共通ICA/<channel> folder.
 %
 % Example (one experimental cohort, 0-300 ms):
 %   export_joint_ica_cwt_band_anova("C:\...\one_experiment")
-% Example (2026 joint-new cohort; session folders are separate subjects):
-%   export_joint_ica_cwt_band_anova( ...
-%       "C:\...\06_模擬実験_2608\01_CWT_joint_new")
 % Example (explicitly select one session per participant):
 %   sessions = ["C:\...\subjectA_01", "C:\...\subjectB_02"];
 %   export_joint_ica_cwt_band_anova(sessions, "C:\...\ANOVA", [0 300]);
@@ -18,9 +15,7 @@ function [analysis_long, quality_control, output_files] = ...
 % time points in the inclusive window. One participant contributes one
 % value per condition x band x channel. Condition is exported separately;
 % band and channel are within-participant factors. Single time points or
-% trials must not be treated as independent participants. For newtimef
-% folders, ParticipantID is the full session-folder name, so sessions
-% such as hasegawa_0807_F and hasegawa_0820 remain distinct as requested.
+% trials must not be treated as independent participants.
 
     if nargin < 1 || isempty(input_root)
         selected = uigetdir('', '同じ実験の被験者フォルダを含む場所を選択');
@@ -57,8 +52,7 @@ function [analysis_long, quality_control, output_files] = ...
             'channelsとbandsには重複しない名前を指定してください。');
     end
 
-    [session_folders, cohort_root, band_folder_name] = ...
-        find_session_folders(input_root);
+    [session_folders, cohort_root] = find_session_folders(input_root);
     if nargin < 2 || isempty(output_dir)
         output_dir = fullfile(cohort_root, ...
             '07_ANOVA_バンド帯_チャンネル');
@@ -69,12 +63,8 @@ function [analysis_long, quality_control, output_files] = ...
     for session_index = 1:numel(session_folders)
         [~, session_name] = fileparts(session_folders(session_index));
         session_ids(session_index) = string(session_name);
-        if band_folder_name == "06_バンド帯_共通ICA_newtimef_全帯域"
-            participant_ids(session_index) = session_ids(session_index);
-        else
-            participant_ids(session_index) = extractBefore( ...
-                session_ids(session_index) + "_", "_");
-        end
+        participant_ids(session_index) = extractBefore( ...
+            session_ids(session_index) + "_", "_");
     end
     [unique_participants, ~, participant_index] = ...
         unique(participant_ids);
@@ -92,7 +82,7 @@ function [analysis_long, quality_control, output_files] = ...
     reference_times = [];
     for session_index = 1:numel(session_folders)
         band_root = fullfile(session_folders(session_index), ...
-            band_folder_name);
+            '06_バンド帯_共通ICA');
         files = dir(fullfile(band_root, '*', ...
             '*_共通ICA_帯域ERSP.csv'));
         if isempty(files)
@@ -106,20 +96,9 @@ function [analysis_long, quality_control, output_files] = ...
             if ~ismember(string(channel_folder), channels)
                 continue;
             end
-            % 再解析後に旧「緑なし」CSVが残っていても二重計上しない。
-            if band_folder_name == ...
-                    "06_バンド帯_共通ICA_newtimef_全帯域" && ...
-                    contains(string(files(file_index).name), "緑なし")
-                preferred_name = replace( ...
-                    string(files(file_index).name), "緑なし", "NoGreen");
-                if isfile(fullfile(files(file_index).folder, ...
-                        preferred_name))
-                    continue;
-                end
-            end
             source = readtable(file_path, 'TextType', 'string', ...
                 'Encoding', 'UTF-8');
-            required = ["Condition", "Channel", ...
+            required = ["SourceSET", "Condition", "Channel", ...
                 "Band", "TimeMs", "MeanERSPdB", "TrialCount"];
             if ~all(ismember(required, ...
                     string(source.Properties.VariableNames)))
@@ -134,10 +113,6 @@ function [analysis_long, quality_control, output_files] = ...
                 error('export_joint_ica_cwt_band_anova:MixedCSV', ...
                     '条件またはチャンネルが混在しています: %s', file_path);
             end
-            original_condition = conditions;
-            conditions = normalize_condition_label( ...
-                conditions, session_ids(session_index), ...
-                string(files(file_index).name), band_folder_name);
             for band_index = 1:numel(bands)
                 selected = source.Band == bands(band_index) & ...
                     source.TimeMs >= time_window_ms(1) & ...
@@ -169,10 +144,9 @@ function [analysis_long, quality_control, output_files] = ...
                 end
                 row = table(participant_ids(session_index), ...
                     session_ids(session_index), conditions, ...
-                    original_condition, ...
                     bands(band_index), string(channel_folder), ...
                     mean_db, numel(values), minimum_trials, ...
-                    time_window_ms(1), time_window_ms(2), ...
+                    time_window_ms(1), time_window_ms(2), file_path, ...
                     'VariableNames', all_cells.Properties.VariableNames);
                 all_cells = [all_cells; row]; %#ok<AGROW>
             end
@@ -241,14 +215,7 @@ function [analysis_long, quality_control, output_files] = ...
             wide_path = fullfile(output_dir, ...
                 "ANOVA_wide_" + condition_index + "_" + ...
                 file_tag + ".csv");
-            wide_output = wide;
-            % 条件はファイル名で特定できるため、SPSS用の測定表には入れない。
-            % IDが完全一致する場合だけ、重複するSessionIDも省く。
-            wide_output.Condition = [];
-            if all(wide_output.ParticipantID == wide_output.SessionID)
-                wide_output.SessionID = [];
-            end
-            writetable(wide_output, wide_path, 'Encoding', 'UTF-8');
+            writetable(wide, wide_path, 'Encoding', 'UTF-8');
             output_files(end + 1, 1) = wide_path; %#ok<AGROW>
         end
     end
@@ -269,138 +236,77 @@ function [analysis_long, quality_control, output_files] = ...
     long_path = fullfile(output_dir, 'ANOVA_long_complete.csv');
     qc_path = fullfile(output_dir, 'ANOVA_inclusion_QC.csv');
     design_path = fullfile(output_dir, 'ANOVA_factor_design.csv');
-    cell_output = all_cells;
-    % すべて同一なら、QC用CSVでは重複するSessionID列を省く。
-    % 内部テーブルと他の出力は変更せず、異なるIDの場合は両列を残す。
-    if all(cell_output.ParticipantID == cell_output.SessionID)
-        cell_output.SessionID = [];
-    end
-    % QC用CSVは正規化済みConditionを唯一の条件列とする。
-    % 元表記は入力CSVに残し、内部テーブルでは引き続き保持する。
-    cell_output.OriginalCondition = [];
-    writetable(cell_output, cell_path, 'Encoding', 'UTF-8');
+    writetable(all_cells, cell_path, 'Encoding', 'UTF-8');
     writetable(analysis_long, long_path, 'Encoding', 'UTF-8');
     writetable(quality_control, qc_path, 'Encoding', 'UTF-8');
     writetable(design, design_path, 'Encoding', 'UTF-8');
     output_files = [cell_path; long_path; qc_path; design_path; ...
         output_files];
     fprintf('保存先: %s\n', output_dir);
-    fprintf('入力帯域フォルダ: %s\n', band_folder_name);
     fprintf('完全な被験者×条件: %d / %d\n', ...
         sum(quality_control.Included), height(quality_control));
     fprintf('時間窓: %.1f–%.1f ms（%d点）\n', ...
         time_window_ms, numel(reference_times));
 end
 
-function [session_folders, cohort_root, band_folder_name] = ...
-        find_session_folders(input_root)
-    supported_folders = ["06_バンド帯_共通ICA", ...
-        "06_バンド帯_共通ICA_newtimef_全帯域"];
+function [session_folders, cohort_root] = find_session_folders(input_root)
     if any(~isfolder(input_root))
         error('export_joint_ica_cwt_band_anova:MissingInput', ...
             '指定された入力フォルダが見つかりません。');
     end
-    if isscalar(input_root)
-        direct_matches = supported_folders(isfolder( ...
-            fullfile(input_root, supported_folders)));
-        if isscalar(direct_matches)
-            session_folders = input_root;
-            cohort_root = string(fileparts(input_root));
-            band_folder_name = direct_matches(1);
-            return;
-        elseif numel(direct_matches) > 1
-            error('export_joint_ica_cwt_band_anova:AmbiguousBandFolder', ...
-                '1セッションに2種類の06帯域フォルダがあります: %s', ...
-                input_root);
-        end
+    if isscalar(input_root) && ...
+            isfolder(fullfile(input_root, '06_バンド帯_共通ICA'))
+        session_folders = input_root;
+        cohort_root = string(fileparts(input_root));
+        return;
     end
     if numel(input_root) > 1
         session_folders = input_root;
         parents = strings(numel(input_root), 1);
-        band_names = strings(numel(input_root), 1);
         for index = 1:numel(input_root)
             parents(index) = string(fileparts(input_root(index)));
-            matches = supported_folders(isfolder( ...
-                fullfile(input_root(index), supported_folders)));
-            if isempty(matches)
+            if ~isfolder(fullfile(input_root(index), ...
+                    '06_バンド帯_共通ICA'))
                 error('export_joint_ica_cwt_band_anova:MissingBandFolder', ...
-                    '対応する06帯域フォルダがありません: %s', ...
-                    input_root(index));
-            elseif numel(matches) > 1
-                error('export_joint_ica_cwt_band_anova:AmbiguousBandFolder', ...
-                    '1セッションに2種類の06帯域フォルダがあります: %s', ...
-                    input_root(index));
+                    '06_バンド帯_共通ICAがありません: %s', input_root(index));
             end
-            band_names(index) = matches(1);
         end
         if numel(unique(parents)) ~= 1
             error('export_joint_ica_cwt_band_anova:MixedCohorts', ...
                 '異なる実験フォルダのセッションを混ぜないでください。');
         end
         cohort_root = parents(1);
-    else
-        found = dir(fullfile(input_root, '**', ...
-            '06_バンド帯_共通ICA*'));
-        found = found([found.isdir]);
-        found = found(ismember(string({found.name}), supported_folders));
-        if isempty(found)
-            error('export_joint_ica_cwt_band_anova:NoBandFolders', ...
-                '配下に対応する06帯域フォルダが見つかりません。');
-        end
-        session_folders = string({found.folder})';
-        band_names = string({found.name})';
-        parents = strings(numel(found), 1);
-        for index = 1:numel(found)
-            parents(index) = string(fileparts(session_folders(index)));
-        end
-        if numel(unique(parents)) ~= 1
-            error('export_joint_ica_cwt_band_anova:MixedCohorts', ...
-                ['入力先に複数の実験フォルダが含まれます。' ...
-                 '同一実験のフォルダを1つ指定してください。']);
-        end
-        cohort_root = parents(1);
-    end
-    if numel(unique(band_names)) ~= 1
-        error('export_joint_ica_cwt_band_anova:MixedMethods', ...
-            'CWT版とnewtimef版の帯域CSVを混ぜないでください。');
-    end
-    band_folder_name = band_names(1);
-end
-
-function condition = normalize_condition_label( ...
-        original, session_id, csv_name, band_folder_name)
-    condition = original;
-    if band_folder_name ~= "06_バンド帯_共通ICA_newtimef_全帯域"
         return;
     end
-    if original == "matsumoto_80_0818" || ...
-            original == "matsumoto_80O_0818"
-        if session_id ~= "matsumoto_0818" || ...
-                ~startsWith(csv_name, original + "_")
-            error('export_joint_ica_cwt_band_anova:AmbiguousCondition', ...
-                '条件名を80 Hzと確認できません: %s', csv_name);
-        end
-        condition = "80 Hz";
+    found = dir(fullfile(input_root, '**', '06_バンド帯_共通ICA'));
+    found = found([found.isdir]);
+    if isempty(found)
+        error('export_joint_ica_cwt_band_anova:NoBandFolders', ...
+            '配下に06_バンド帯_共通ICAが見つかりません。');
     end
-    if condition == "緑なし"
-        condition = "NoGreen";
+    session_folders = strings(numel(found), 1);
+    parents = strings(numel(found), 1);
+    for index = 1:numel(found)
+        session_folders(index) = string(found(index).folder);
+        parents(index) = string(fileparts(found(index).folder));
     end
-    expected = ["0 Hz", "80 Hz", "160 Hz", "NoGreen"];
-    if ~ismember(condition, expected)
-        error('export_joint_ica_cwt_band_anova:UnexpectedCondition', ...
-            '未確認の条件名%sがあります: %s', original, csv_name);
+    if numel(unique(parents)) ~= 1
+        error('export_joint_ica_cwt_band_anova:MixedCohorts', ...
+            ['入力先に複数の実験フォルダが含まれます。' ...
+             '同一実験のフォルダを1つ指定してください。']);
     end
+    cohort_root = parents(1);
 end
 
 function cells = empty_cell_table()
     cells = table('Size', [0 11], ...
         'VariableTypes', {'string', 'string', 'string', ...
-        'string', 'string', 'string', 'double', 'double', 'double', ...
-        'double', 'double'}, ...
+        'string', 'string', 'double', 'double', 'double', ...
+        'double', 'double', 'string'}, ...
         'VariableNames', {'ParticipantID', 'SessionID', ...
-        'Condition', 'OriginalCondition', 'Band', 'Channel', 'ERSPdB', ...
+        'Condition', 'Band', 'Channel', 'ERSPdB', ...
         'TimePointCount', 'MinimumTrialCount', ...
-        'WindowStartMs', 'WindowEndMs'});
+        'WindowStartMs', 'WindowEndMs', 'SourceCSV'});
 end
 
 function [is_complete, missing] = check_complete_cells( ...

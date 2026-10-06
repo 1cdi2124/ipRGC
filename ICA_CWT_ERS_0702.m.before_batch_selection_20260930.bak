@@ -5,13 +5,21 @@
 % =================================================================
 
 % --- ディレクトリ設定 ---
-selected_root = uigetdir('', ...
-    '03_手動サッケード、被験者フォルダ、または被験者一覧フォルダを選択');
-if isequal(selected_root, 0), error('処理を中断した.'); end
-addpath(fileparts(mfilename('fullpath')), '-end');
-input_dirs = pae_select_subject_input_dirs( ...
-    selected_root, '03_手動サッケード', '.set');
-fprintf('対象被験者フォルダ: %d 件\n', numel(input_dirs));
+input_dir = uigetdir('', '解析対象の.setファイルが含まれるフォルダを選択してください');
+if input_dir == 0, error('処理を中断した.'); end
+
+[parent_path, ~] = fileparts(input_dir); 
+[~, parent_folder_name] = fileparts(parent_path); 
+
+clean_name = strrep(parent_folder_name, '_', '');
+output_folder_name = '04_CWT';
+main_output = fullfile(parent_path, output_folder_name);
+
+if ~exist(main_output, 'dir'), mkdir(main_output); end
+plot_output = fullfile(main_output, 'ICLabel');
+if ~exist(plot_output, 'dir'), mkdir(plot_output); end
+
+file_list = dir(fullfile(input_dir, '*.set'));
 
 % =================================================================
 % --- 解析パラメータの設定 ---
@@ -37,18 +45,7 @@ set(groot, 'DefaultTextInterpreter', 'tex');
 set(groot, 'DefaultAxesTickLabelInterpreter', 'tex');
 set(groot, 'DefaultLegendInterpreter', 'tex');
 
-for subject_index = 1:numel(input_dirs)
-input_dir = char(input_dirs(subject_index));
-[parent_path, ~] = fileparts(input_dir);
-main_output = fullfile(parent_path, '04_CWT');
-if ~exist(main_output, 'dir'), mkdir(main_output); end
-plot_output = fullfile(main_output, 'ICLabel');
-if ~exist(plot_output, 'dir'), mkdir(plot_output); end
-file_list = dir(fullfile(input_dir, '*.set'));
-fprintf('\n=== 被験者 %d/%d: %s（SET %d件）===\n', ...
-    subject_index, numel(input_dirs), parent_path, numel(file_list));
-
-% SPSS用マスターデータは被験者ごとに初期化する
+% SPSS用一括統合マスターデータの初期化
 spss_master_cell = {}; 
 
 try
@@ -379,7 +376,7 @@ catch ME
 end
 
 % =================================================================
-% SPSS専用：この被験者の全条件・全バンドをまとめたCSV
+% SPSS専用：全被験者・全条件・全バンド一括統合マスターCSVの自動生成（全処理終了後）
 % =================================================================
 if ~isempty(spss_master_cell)
     % ヘッダー行の生成
@@ -402,7 +399,6 @@ else
 end
 
 fprintf('\n=== 全工程終了. 出力先: %s ===\n', main_output);
-end
 
 function s = num_idx_str(n)
     s = num2str(n);

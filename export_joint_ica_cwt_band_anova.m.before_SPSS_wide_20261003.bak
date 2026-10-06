@@ -241,14 +241,7 @@ function [analysis_long, quality_control, output_files] = ...
             wide_path = fullfile(output_dir, ...
                 "ANOVA_wide_" + condition_index + "_" + ...
                 file_tag + ".csv");
-            wide_output = wide;
-            % 条件はファイル名で特定できるため、SPSS用の測定表には入れない。
-            % IDが完全一致する場合だけ、重複するSessionIDも省く。
-            wide_output.Condition = [];
-            if all(wide_output.ParticipantID == wide_output.SessionID)
-                wide_output.SessionID = [];
-            end
-            writetable(wide_output, wide_path, 'Encoding', 'UTF-8');
+            writetable(wide, wide_path, 'Encoding', 'UTF-8');
             output_files(end + 1, 1) = wide_path; %#ok<AGROW>
         end
     end

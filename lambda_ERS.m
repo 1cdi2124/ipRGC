@@ -7,12 +7,13 @@ clear; close all;
 [ALLEEG, EEG, CURRENTSET, ALLCOM] = eeglab;
 
 % --- 1. ディレクトリ設定 ---
-input_dir = uigetdir('', '解析対象の.setファイルが含まれるフォルダを選択してください');
-if input_dir == 0, error('処理を中断しました。'); end
-
-[parent_path, ~] = fileparts(input_dir);
-main_output = fullfile(parent_path, '04_ERP');
-if ~exist(main_output, 'dir'), mkdir(main_output); end
+selected_root = uigetdir('', ...
+    '02_サッケード自動検出、被験者フォルダ、または被験者一覧フォルダを選択');
+if isequal(selected_root, 0), error('処理を中断しました。'); end
+addpath(fileparts(mfilename('fullpath')), '-end');
+input_dirs = pae_select_subject_input_dirs( ...
+    selected_root, '02_サッケード自動検出', '.set');
+fprintf('対象被験者フォルダ: %d 件\n', numel(input_dirs));
 
 % --- 2. 解析パラメータの設定 ---
 target_event = 'Saccade';        % サッケードマーカー
@@ -23,8 +24,14 @@ plot_window = [-50 200];         % 描画区間
 cond_keys = {'0O', '80O', '160O'}; 
 cond_colors = {'k', 'b', 'r'}; 
 
+for subject_index = 1:numel(input_dirs)
+input_dir = char(input_dirs(subject_index));
+[parent_path, ~] = fileparts(input_dir);
+main_output = fullfile(parent_path, '04_ERP');
+if ~exist(main_output, 'dir'), mkdir(main_output); end
 file_list = dir(fullfile(input_dir, '*.set'));
-if isempty(file_list), error('フォルダ内に.setファイルがありません。'); end
+fprintf('\n=== 被験者 %d/%d: %s（SET %d件）===\n', ...
+    subject_index, numel(input_dirs), parent_path, numel(file_list));
 
 % --- 3. データの堅牢なスキャンとグループ化 ---
 fprintf('ファイルをスキャンし、条件ごとのグループ化を行います...\n');
@@ -171,4 +178,6 @@ for sub_idx = 1:length(subjects)
     save(mat_save_path, 'erp_storage', 'time_points', 'chan_labels');
     fprintf('  -> 完了: 4パターンの画像を保存しました。\n');
 end
-fprintf('\n全処理完了。結果は %s に保存されました。\n', main_output);
+fprintf('\n被験者の処理完了。結果は %s に保存されました。\n', main_output);
+end
+fprintf('\n全 %d 被験者の処理が完了しました。\n', numel(input_dirs));

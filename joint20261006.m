@@ -1,34 +1,58 @@
-function master_manifest = run_joint_ica_newtimef_band_analysis( ...
-        input_root, analysis_channels, ica_seed, ersp_max_db)
-%RUN_JOINT_ICA_NEWTIMEF_BAND_ANALYSIS 共通ICA+従来newtimef方式のERSP解析。
+function master_manifest = joint20261006( ...
+        input_root, analysis_channels, ica_seed, ersp_max_db, brain_threshold, ...
+        mode, ica_selection)
+%JOINT20261006 Brain確率による共通ICA+従来newtimef方式のERSP解析。
 %
 % 実行例:
-%   run_joint_ica_newtimef_band_analysis
-%   run_joint_ica_newtimef_band_analysis("C:\...\03_手動サッケード")
-%   run_joint_ica_newtimef_band_analysis( ...
+%   joint20261006
+%   joint20261006("C:\...\03_手動サッケード")
+%   joint20261006( ...
 %       "C:\...\03_手動サッケード", "Oz")
-%   run_joint_ica_newtimef_band_analysis( ...
+%   joint20261006( ...
 %       "C:\...\03_手動サッケード", "Oz", 10)
-%   run_joint_ica_newtimef_band_analysis( ...
+%   joint20261006( ...
 %       "C:\...\03_手動サッケード", [], 10)
-%   run_joint_ica_newtimef_band_analysis( ...
+%   joint20261006( ...
 %       "C:\...\03_手動サッケード", "Oz", 10, 1.5)
+%   joint20261006( ...
+%       "C:\...\03_手動サッケード", [], [], [], 0.60)
+%       % Brain確率60%以上だけを採用。他の設定は既定値。
+% brain_threshold: 0-1の確率（0.50 = 50%）。省略時は設定欄の値。
+%   joint20261006("C:\...\07_ANOVA_バンド帯_チャンネル", ...
+%       [], [], [], [], "wide_only")
+%       % 既存ANOVA_all_cells_QC.csvを整形。ICA/ERSPは再実行しない。
+%   joint20261006("C:\...\実験ルート", [], [], [], [], ...
+%       "analysis", "manual") % 被験者ごとに採用ICを手動選択
+% 第7引数ica_selection: ask（実行時選択）/ brain（自動）/ manual（手動）。
+% 手動選択の初期候補はBrain確率 >= brain_threshold。閾値外も手動採用可能。
+% IC番号は被験者ごとに異なる。同一被験者では全条件に同じ選択を適用する。
 %
 % 各03_手動サッケード内のSETを同一被験者の条件として扱う。
-% 0Oは緑LED常灯、緑なしは無灯の眼球運動対照であり、区別する。
+% 0Oは緑LED常灯、NoGreenは無灯の眼球運動対照であり、区別する。
+% 入力SET名に残る「緑なし」はNoGreenとして読み替える。
 % 全条件へ同一フィルタ・平均基準を適用し、連結データでICAを1回だけ
-% 学習する。明確なEye/Muscle/Line Noise/Channel Noiseだけを自動除去し、
-% Brain確率80%未満やEOG相関だけが高いICは要確認として残す。
+% 学習する。自動方式ではICLabelのBrain確率が閾値以上のICだけを採用。
+% 既定の閾値は50%。手動方式ではこの基準を初期候補として変更できる。
+% 自動方式では他クラス確率やEOG相関を採否に使わず、確認用に記録する。
 % 同じIC選択を全条件へ適用する。0.5-200 Hzの平均ERSPは単一の
 % newtimef解析により、パワー領域でベースライン処理・試行平均した後に
 % dB変換する。低周波を別手法・探索的パネルへ分離しない。
-% 全条件で共通の時間・周波数グリッドを基準に、ERSPを時間・周波数
-% の両方向で線形補間してから保存・描画・差分計算する。
+% 04ではnewtimefが返す時間・周波数グリッドを補間せず使用する。
+% 05と06の条件間比較は同一軸を必須とし、不一致なら差分計算前に停止する。
+% 元SET内のboundaryを保持し、条件SET間の接続点にもhard boundaryを追加。
+% ICA学習用フィルタ・リサンプリングは各連続区間内で行う。
+% boundaryの保持により、旧版と同じseedでもICA結果が変わる場合がある。
 %
 % 出力:
 %   04_ERSP_共通ICA_newtimef_全帯域           条件別ERSPとICA-QC
-%   05_ERSP緑なし差分_共通ICA_newtimef_全帯域 各条件-緑なしのERSP差分
+%   05_ERSP_NoGreen差分_共通ICA_newtimef_全帯域 各条件-NoGreenのERSP差分
 %   06_バンド帯_共通ICA_newtimef_全帯域       条件別・差分の帯域ERSP
+%   07_ANOVA_バンド帯_チャンネル             条件×帯域×chの三要因用wide
+% 三要因用は条件別ERSP（NoGreen差分ではない）の指定時間窓のdB平均。
+% ANOVA出力は三要因用の4表だけ。条件別の二要因用wideは生成しない。
+% 既存の二要因用ファイルは削除しない（wide_onlyでは既存cells表を入力可）。
+% 全条件・帯域・chが完全な被験者だけ採用する。被験者フォルダ名をIDとする。
+% 通常実行は今回選択し正常終了したデータだけを集計し、過去出力を混ぜない。
 
     config = default_config();
     if nargin >= 2 && ~isempty(analysis_channels)
@@ -53,6 +77,21 @@ function master_manifest = run_joint_ica_newtimef_band_analysis( ...
             mfilename, 'ersp_max_db', 4);
         config.ersp_color_limit_db = double(ersp_max_db);
     end
+    if nargin >= 5 && ~isempty(brain_threshold)
+        config.brain_keep_threshold = brain_threshold;
+    end
+    validateattributes(config.brain_keep_threshold, {'numeric'}, ...
+        {'scalar', 'real', 'finite', '>=', 0, '<=', 1}, ...
+        mfilename, 'brain_threshold', 5);
+    config.brain_keep_threshold = double(config.brain_keep_threshold);
+    if nargin < 6 || isempty(mode)
+        mode = "analysis";
+    end
+    mode = string(mode);
+    if ~isscalar(mode) || ~ismember(mode, ["analysis", "wide_only"])
+        error('joint20261006:InvalidMode', ...
+            'modeはanalysisまたはwide_onlyを指定してください。');
+    end
     if nargin < 1 || strlength(string(input_root)) == 0
         selected = uigetdir('', ...
             ['実験ルート、被験者フォルダ、または' ...
@@ -70,6 +109,17 @@ function master_manifest = run_joint_ica_newtimef_band_analysis( ...
             '入力フォルダが見つかりません: %s', input_root);
     end
 
+    if mode == "wide_only"
+        master_manifest = export_existing_threeway(input_root, config);
+        return;
+    end
+
+    if nargin >= 7 && ~isempty(ica_selection)
+        config.ica_selection_mode = string(ica_selection);
+    end
+    config.ica_selection_mode = resolve_ica_selection_mode( ...
+        config.ica_selection_mode);
+
     initialize_eeglab(config);
     manual_folders = find_manual_saccade_folders(input_root);
     if isempty(manual_folders)
@@ -78,17 +128,24 @@ function master_manifest = run_joint_ica_newtimef_band_analysis( ...
     end
 
     master_manifest = table();
+    anova_cells = empty_threeway_cells();
+    participant_ids = strings(numel(manual_folders), 1);
+    cohort_roots = strings(numel(manual_folders), 1);
     fprintf('\n=== 全条件共通ICA・newtimef ERSP帯域解析を開始 ===\n');
     fprintf('検索ルート: %s\n', input_root);
     fprintf('対象フォルダ数: %d\n', numel(manual_folders));
     fprintf('解析フィルタ: %.1f–%.0f Hz / 平均基準（EOG除外）\n', ...
         config.analysis_highpass_hz, config.analysis_lowpass_hz);
     fprintf('ICA乱数シード: %u\n', config.ica_seed);
+    fprintf('ICA採用方式: %s / Brain自動基準・手動初期候補: >= %.2f%%\n', ...
+        config.ica_selection_mode, 100 * config.brain_keep_threshold);
     fprintf('ERSP表示範囲: ±%.2f dB\n', config.ersp_color_limit_db);
 
     for folder_index = 1:numel(manual_folders)
         manual_folder = manual_folders(folder_index);
         subject_folder = string(fileparts(manual_folder));
+        [cohort_roots(folder_index), participant_ids(folder_index)] = ...
+            fileparts(subject_folder);
         output_roots = make_output_roots(subject_folder, config);
         ensure_folder(output_roots.CWT);
         ensure_folder(output_roots.Difference);
@@ -96,7 +153,7 @@ function master_manifest = run_joint_ica_newtimef_band_analysis( ...
         fprintf('\n--- [%d/%d] %s ---\n', folder_index, ...
             numel(manual_folders), manual_folder);
         fprintf('  04 ERSP: %s\n', output_roots.CWT);
-        fprintf('  05 緑なし差分: %s\n', output_roots.Difference);
+        fprintf('  05 NoGreen差分: %s\n', output_roots.Difference);
         fprintf('  06 バンド帯: %s\n', output_roots.Band);
 
         try
@@ -107,16 +164,22 @@ function master_manifest = run_joint_ica_newtimef_band_analysis( ...
             [folder_manifest, analysis_results] = ...
                 analyze_all_conditions(datasets, output_roots, ...
                     joint_ica_report, config);
+            validate_all_result_axes(analysis_results, config);
             difference_manifest = create_cwt_difference_outputs( ...
                 analysis_results, output_roots.Difference, config);
             if ~isempty(difference_manifest)
                 writetable(difference_manifest, fullfile( ...
                     output_roots.Difference, ...
-                    '共通ICA_newtimef_ERSP緑なし差分_manifest.csv'), ...
+                    '共通ICA_newtimef_ERSP_NoGreen差分_manifest.csv'), ...
                     'Encoding', 'UTF-8');
             end
             create_all_channel_overlays(analysis_results, ...
                 output_roots.Band, config);
+            if config.export_threeway_anova
+                subject_cells = collect_threeway_cells(analysis_results, ...
+                    participant_ids(folder_index), config);
+                anova_cells = [anova_cells; subject_cells]; %#ok<AGROW>
+            end
             folder_status = "完了";
             folder_message = "";
         catch ME
@@ -147,19 +210,270 @@ function master_manifest = run_joint_ica_newtimef_band_analysis( ...
         end
     end
 
+    if config.export_threeway_anova
+        parents = unique(cohort_roots, 'stable');
+        for parent_index = 1:numel(parents)
+            ids = participant_ids(cohort_roots == parents(parent_index));
+            selected = ismember(anova_cells.ParticipantID, ids);
+            output_dir = fullfile(parents(parent_index), ...
+                config.anova_output_relative_path);
+            % CSV保存失敗は成功したICA/ERSP解析を無効にせず、明示する。
+            try
+                write_threeway_outputs(anova_cells(selected, :), ids, ...
+                    output_dir, config, "CurrentAnalysis");
+            catch ME
+                warning('joint20261006:ThreewayExportFailed', ...
+                    '三要因用CSVの保存に失敗: %s', ME.message);
+            end
+        end
+    end
+
     fprintf('\n=== 全条件共通ICA・newtimef ERSP帯域解析が終了しました ===\n');
     fprintf('完了フォルダ: %d / 失敗フォルダ: %d\n', ...
         sum(master_manifest.Status == "完了"), ...
         sum(master_manifest.Status == "失敗"));
 end
 
+function cells = empty_threeway_cells()
+    cells = table('Size', [0 9], ...
+        'VariableTypes', {'string', 'string', 'string', 'string', ...
+            'double', 'double', 'double', 'double', 'double'}, ...
+        'VariableNames', {'ParticipantID', 'Condition', 'Band', 'Channel', ...
+            'ERSPdB', 'TimePointCount', 'MinimumTrialCount', ...
+            'WindowStartMs', 'WindowEndMs'});
+end
+
+function cells = collect_threeway_cells(results, participant_id, config)
+    cells = empty_threeway_cells();
+    for condition_index = 1:numel(results)
+        result = results(condition_index);
+        for channel_index = 1:numel(result.Channels)
+            channel = result.Channels(channel_index);
+            times = channel.CWTTimes(:)';
+            selected = times >= config.anova_time_window_ms(1) & ...
+                times <= config.anova_time_window_ms(2);
+            if size(channel.Mean, 1) ~= numel(config.band_names) || ...
+                    size(channel.Mean, 2) ~= numel(times)
+                error('joint20261006:BandShapeMismatch', ...
+                    '三要因用の帯域平均と時間軸のサイズが一致しません。');
+            end
+            for band_index = 1:numel(config.band_names)
+                values = channel.Mean(band_index, selected);
+                counts = channel.N(band_index, selected);
+                mean_db = NaN;
+                minimum_trials = NaN;
+                if ~isempty(values) && all(isfinite(values))
+                    mean_db = mean(values);
+                end
+                if ~isempty(counts) && all(isfinite(counts))
+                    minimum_trials = min(counts);
+                end
+                row = table(string(participant_id), result.ConditionLabel, ...
+                    config.band_names(band_index), channel.Name, mean_db, ...
+                    numel(values), minimum_trials, ...
+                    config.anova_time_window_ms(1), ...
+                    config.anova_time_window_ms(2), ...
+                    'VariableNames', cells.Properties.VariableNames);
+                cells = [cells; row]; %#ok<AGROW>
+            end
+        end
+    end
+end
+
+function manifest = export_existing_threeway(input_root, config)
+    csv_path = fullfile(input_root, 'ANOVA_all_cells_QC.csv');
+    if ~isfile(csv_path)
+        csv_path = fullfile(input_root, config.anova_output_relative_path, ...
+            'ANOVA_all_cells_QC.csv');
+    end
+    if ~isfile(csv_path)
+        error('joint20261006:NoExistingANOVACells', ...
+            ['wide_onlyではANOVA_all_cells_QC.csvが必要です。' ...
+             '07_ANOVAフォルダまたはその親を指定してください。']);
+    end
+    source = readtable(csv_path, 'TextType', 'string', 'Encoding', 'UTF-8');
+    template = empty_threeway_cells();
+    required = template.Properties.VariableNames;
+    if ~all(ismember(required, source.Properties.VariableNames))
+        error('joint20261006:UnexpectedANOVACSV', ...
+            'ANOVA_all_cells_QC.csvに必要な列がありません。');
+    end
+    cells = source(:, required);
+    % 既存CSVの値を再利用するだけ。現在のseed/Brain閾値で解析済みとは記録しない。
+    cells.Condition(cells.Condition == "緑なし") = "NoGreen";
+    if isempty(cells)
+        error('joint20261006:EmptyANOVACSV', '既存ANOVA表が空です。');
+    end
+    ids = unique(cells.ParticipantID, 'stable');
+    output_dir = string(fileparts(csv_path));
+    files = write_threeway_outputs(cells, ids, output_dir, config, ...
+        "ExistingANOVACSV_UnverifiedICASettings");
+    manifest = table(files, 'VariableNames', {'ThreewayOutputFile'});
+    fprintf(['既存表の整形のみ完了。ICA/ERSPの再解析は行っていません。' ...
+        '元のICA設定は別途確認してください。\n']);
+end
+
+function [wide, design, inclusion, complete_long] = ...
+        build_threeway_tables(cells, participant_ids, config)
+    conditions = config.anova_conditions(:)';
+    bands = config.band_names(:)';
+    channels = config.analysis_channels(:)';
+    tags = config.anova_condition_tags(:)';
+    if numel(tags) ~= numel(conditions) || ...
+            numel(unique(conditions)) ~= numel(conditions) || ...
+            numel(unique(bands)) ~= numel(bands) || ...
+            numel(unique(lower(channels))) ~= numel(channels)
+        error('joint20261006:InvalidANOVAFactors', ...
+            '三要因の水準または条件タグが不正・重複しています。');
+    end
+    validateattributes(config.anova_time_window_ms, {'numeric'}, ...
+        {'real', 'finite', 'numel', 2, 'increasing'});
+    if any(~ismember(cells.Condition, conditions))
+        error('joint20261006:UnexpectedANOVACondition', ...
+            '三要因表に未設定の条件があります: %s', ...
+            strjoin(unique(cells.Condition(~ismember(cells.Condition, ...
+                conditions))), ', '));
+    end
+    participant_ids = string(participant_ids(:));
+    if numel(unique(participant_ids)) ~= numel(participant_ids)
+        error('joint20261006:DuplicateParticipantID', ...
+            '三要因用の被験者IDが重複しています。');
+    end
+    n_factors = numel(conditions) * numel(bands) * numel(channels);
+    design = table('Size', [n_factors 8], ...
+        'VariableTypes', {'string', 'string', 'string', 'string', ...
+            'double', 'double', 'double', 'double'}, ...
+        'VariableNames', {'Variable', 'Condition', 'Band', 'Channel', ...
+            'ConditionOrder', 'BandOrder', 'ChannelOrder', 'MeasurementOrder'});
+    position = 0;
+    for condition_index = 1:numel(conditions)
+        for band_index = 1:numel(bands)
+            for channel_index = 1:numel(channels)
+                position = position + 1;
+                name = tags(condition_index) + "_" + bands(band_index) + ...
+                    "_" + channels(channel_index);
+                if ~isvarname(char(name)) || strlength(name) > 64
+                    error('joint20261006:InvalidSPSSVariable', ...
+                        'SPSS用の変数名が不正です: %s', name);
+                end
+                design(position, :) = {name, conditions(condition_index), ...
+                    bands(band_index), channels(channel_index), ...
+                    condition_index, band_index, channel_index, position};
+            end
+        end
+    end
+    if numel(unique(design.Variable)) ~= n_factors
+        error('joint20261006:DuplicateSPSSVariable', ...
+            'SPSS用の測定変数名が重複しています。');
+    end
+    wide = array2table(zeros(0, n_factors), ...
+        'VariableNames', cellstr(design.Variable));
+    wide = addvars(wide, strings(0, 1), 'Before', 1, ...
+        'NewVariableNames', 'ParticipantID');
+    inclusion = table('Size', [0 5], ...
+        'VariableTypes', {'string', 'logical', 'double', 'double', 'string'}, ...
+        'VariableNames', {'ParticipantID', 'Included', 'ObservedCells', ...
+            'ExpectedCells', 'MissingOrInvalidCells'});
+    complete_long = cells([], :);
+    for participant_index = 1:numel(participant_ids)
+        id = participant_ids(participant_index);
+        selected = cells(cells.ParticipantID == id & ...
+            ismember(cells.Band, bands) & ...
+            ismember(cells.Channel, channels), :);
+        missing = strings(0, 1);
+        values = nan(1, n_factors);
+        selected_order = zeros(n_factors, 1);
+        expected_time_points = [];
+        for factor_index = 1:n_factors
+            match = find(selected.Condition == design.Condition(factor_index) & ...
+                selected.Band == design.Band(factor_index) & ...
+                selected.Channel == design.Channel(factor_index));
+            if numel(match) ~= 1
+                missing(end + 1, 1) = design.Variable(factor_index) + ...
+                    " (count=" + numel(match) + ")"; %#ok<AGROW>
+                continue;
+            end
+            row = selected(match, :);
+            if isempty(expected_time_points) && ...
+                    isfinite(row.TimePointCount) && row.TimePointCount >= 1
+                expected_time_points = row.TimePointCount;
+            end
+            valid = isfinite(row.ERSPdB) && ...
+                isfinite(row.MinimumTrialCount) && row.MinimumTrialCount >= 1 && ...
+                isfinite(row.TimePointCount) && row.TimePointCount >= 1 && ...
+                row.TimePointCount == fix(row.TimePointCount) && ...
+                ~isempty(expected_time_points) && ...
+                row.TimePointCount == expected_time_points && ...
+                row.WindowStartMs == config.anova_time_window_ms(1) && ...
+                row.WindowEndMs == config.anova_time_window_ms(2);
+            if ~valid
+                missing(end + 1, 1) = design.Variable(factor_index) + ...
+                    " (invalid value/count/window)"; %#ok<AGROW>
+                continue;
+            end
+            values(factor_index) = row.ERSPdB;
+            selected_order(factor_index) = match;
+        end
+        included = isempty(missing);
+        inclusion(end + 1, :) = {id, included, height(selected), ...
+            n_factors, strjoin(missing, '; ')}; %#ok<AGROW>
+        if included
+            row = array2table(values, ...
+                'VariableNames', cellstr(design.Variable));
+            row = addvars(row, id, 'Before', 1, ...
+                'NewVariableNames', 'ParticipantID');
+            wide = [wide; row]; %#ok<AGROW>
+            complete_long = [complete_long; selected(selected_order, :)]; %#ok<AGROW>
+        end
+    end
+end
+
+function files = write_threeway_outputs(cells, ids, output_dir, config, origin)
+    [wide, design, inclusion, complete_long] = ...
+        build_threeway_tables(cells, ids, config);
+    inclusion.DataOrigin = repmat(string(origin), height(inclusion), 1);
+    inclusion.ICASeed = nan(height(inclusion), 1);
+    inclusion.BrainKeepThreshold = nan(height(inclusion), 1);
+    inclusion.BrainSuggestionThreshold = nan(height(inclusion), 1);
+    inclusion.ICASelectionMode = repmat("Unknown", height(inclusion), 1);
+    if origin == "CurrentAnalysis"
+        inclusion.ICASeed(:) = config.ica_seed;
+        inclusion.ICASelectionMode(:) = config.ica_selection_mode;
+        inclusion.BrainSuggestionThreshold(:) = config.brain_keep_threshold;
+        if config.ica_selection_mode == "brain"
+            inclusion.BrainKeepThreshold(:) = config.brain_keep_threshold;
+        end
+    end
+    ensure_folder(output_dir);
+    files = string(fullfile(output_dir, [ ...
+        "ANOVA_threeway_wide.csv"; "ANOVA_threeway_factor_design.csv"; ...
+        "ANOVA_threeway_inclusion_QC.csv"; "ANOVA_threeway_long_complete.csv"]));
+    outputs = {wide, design, inclusion, complete_long};
+    for file_index = 1:numel(files)
+        writetable(outputs{file_index}, files(file_index), 'Encoding', 'UTF-8');
+    end
+    fprintf('三要因用wide: %d被験者 / %d測定列（%d条件×%d帯域×%dch）\n', ...
+        height(wide), height(design), numel(config.anova_conditions), ...
+        numel(config.band_names), numel(config.analysis_channels));
+    fprintf('三要因用保存先: %s\n', output_dir);
+    if height(wide) < 2
+        warning('joint20261006:TooFewANOVAParticipants', ...
+            '完全な被験者が2人未満です。wideは出力しますが群の分散分析はできません。');
+    end
+end
+
 function config = default_config()
     config.cwt_output_relative_path = ...
         "04_ERSP_共通ICA_newtimef_全帯域";
     config.difference_output_relative_path = ...
-        "05_ERSP緑なし差分_共通ICA_newtimef_全帯域";
+        "05_ERSP_NoGreen差分_共通ICA_newtimef_全帯域";
     config.band_output_relative_path = ...
         "06_バンド帯_共通ICA_newtimef_全帯域";
+    config.export_threeway_anova = true;
+    config.anova_output_relative_path = "07_ANOVA_バンド帯_チャンネル";
+    config.anova_time_window_ms = [0 300]; % ERSPdBを平均する時間窓
+    config.anova_conditions = ["0 Hz", "80 Hz", "160 Hz", "NoGreen"];
+    config.anova_condition_tags = ["C0Hz", "C80Hz", "C160Hz", "NoGreen"];
     config.target_channels = ["F3", "F4", "Fz", "O1", ...
         "O2", "Oz", "PO7", "PO8"];
     config.analysis_channels = config.target_channels;
@@ -175,12 +489,13 @@ function config = default_config()
     config.ica_training_srate = 250;
     config.ica_rank = 7;
     config.ica_seed = 3;
-    config.brain_confident_threshold = 0.80;
-    config.artifact_remove_class_names = [ ...
-        "Eye", "Muscle", "Line Noise", "Channel Noise"];
-    config.artifact_remove_threshold = 0.80;
+    config.ica_selection_mode = "ask"; % ask / brain / manual
+    config.manual_ica_figure_visible = 'on';
+    % ICA採用閾値: 0.50 = 50%。第5引数で実行時に上書きできる。
+%-----------------------------------------------------------------------------------------------------
+    config.brain_keep_threshold = 0.50;
     config.eog_correlation_threshold = 0.40;
-
+%-----------------------------------------------------------------------------------------------------
     config.display_window_ms = [-200 300];
     config.baseline_window_ms = [-250 -100];
     % 0 HzはDCで時間周波数解析できないため、最低周波数は0.5 Hzとする。
@@ -198,7 +513,7 @@ function config = default_config()
     config.ersp_color_limit_db = 1.5;
 %-----------------------------------------------------------------------
     config.mean_ersp_method = ...
-        "0.5-200 Hz: EEGLAB newtimef; linear interpolation in time and frequency onto common grid";
+        "0.5-200 Hz: epoch voltage baseline then one EEGLAB newtimef analysis (power baseline -> trial mean -> dB); no interpolation; cross-condition axes must match";
     config.sem_method = ...
         "single-trial dB values relative to the common newtimef baseline; descriptive SEM";
 
@@ -321,7 +636,12 @@ function datasets = load_and_preprocess_conditions(manual_folder, config)
             parse_condition_name(base_name);
         datasets(file_index).EEG = EEG;
         datasets(file_index).SourceSET = set_path;
-        datasets(file_index).BaseName = string(base_name);
+        % 元のSET名・SourceSETは変えず、生成物のベース名だけ正規化。
+        output_base_name = string(base_name);
+        if is_green
+            output_base_name = replace(output_base_name, "緑なし", "NoGreen");
+        end
+        datasets(file_index).BaseName = output_base_name;
         datasets(file_index).ConditionLabel = condition_label;
         datasets(file_index).ConditionValue = condition_value;
         datasets(file_index).IsGreen = is_green;
@@ -368,6 +688,8 @@ function [datasets, report] = run_joint_ica_cleaning( ...
     if abs(training.srate - config.ica_training_srate) > 1e-6
         training = pop_resample(training, config.ica_training_srate);
     end
+    fprintf('  boundary保持: 連結時%d個 / ICA学習時%d個（条件接続点%d個）\n', ...
+        numel(merged.event), numel(training.event), numel(datasets) - 1);
 
     rng(config.ica_seed, 'twister');
     data_rank = rank(double(training.data(target_indices, :)));
@@ -397,7 +719,7 @@ function [datasets, report] = run_joint_ica_cleaning( ...
             labeled.etc.ic_classification;
     else
         error('run_joint_ica_cwt_band_analysis:ICLabelMissing', ...
-            ['明確なアーチファクトと要確認ICを分類するため、' ...
+            ['Brain確率で採用ICを判定するため、' ...
              'ICLabelが必要です。EEGLABへICLabelプラグインを' ...
              '追加してください。']);
     end
@@ -408,8 +730,17 @@ function [datasets, report] = run_joint_ica_cleaning( ...
     eog_correlations = calculate_eog_correlations( ...
         training_ica, training_eog);
     [remove_mask, review_mask, removal_reason, review_reason] = ...
-        choose_artifact_components(classification, classes, ...
-        eog_correlations, config);
+        choose_brain_components(classification, classes, ...
+        eog_correlations, config, config.ica_selection_mode == "manual");
+    suggested_components = find(~remove_mask(:))';
+    if config.ica_selection_mode == "manual"
+        selected_components = select_manual_ica_components(merged, ...
+            training, classification, classes, eog_correlations, ...
+            suggested_components, output_root, config);
+        [remove_mask, review_mask, removal_reason, review_reason] = ...
+            apply_manual_ica_selection(classification, classes, ...
+                eog_correlations, selected_components, config);
+    end
     removed_components = find(remove_mask(:))';
     review_components = find(review_mask(:))';
     kept_components = find(~remove_mask(:))';
@@ -427,6 +758,23 @@ function [datasets, report] = run_joint_ica_cleaning( ...
     report.DataRank = data_rank;
     report.RequestedRank = config.ica_rank;
     report.ICASeed = config.ica_seed;
+    report.BoundaryHandling = "Preserve within-SET boundaries and insert hard boundaries between conditions";
+    report.AnalysisBoundaryCount = numel(merged.event);
+    report.ICATrainingBoundaryCount = numel(training.event);
+    report.ConditionJoinBoundaryCount = numel(datasets) - 1;
+    report.AnalysisBoundaryLatencies = [merged.event.latency];
+    report.AnalysisBoundaryDurations = [merged.event.duration];
+    report.SelectionMode = config.ica_selection_mode;
+    report.SelectionMethod = "ICLabel Brain probability >= threshold";
+    if config.ica_selection_mode == "manual"
+        report.SelectionMethod = "Manual IC selection; Brain threshold is an initial suggestion only";
+    end
+    report.SuggestedKeptComponents = suggested_components;
+    report.BrainKeepThreshold = config.brain_keep_threshold;
+    report.BrainSuggestionThreshold = config.brain_keep_threshold;
+    if config.ica_selection_mode == "manual"
+        report.BrainKeepThreshold = NaN; % 手動選択には固定の採用閾値はない。
+    end
     report.Classes = classes;
     report.Classification = classification;
     report.EOGCorrelations = eog_correlations;
@@ -453,6 +801,196 @@ function [datasets, report] = run_joint_ica_cleaning( ...
         EEG = clear_ica_fields(EEG);
         EEG = eeg_checkset(EEG, 'eventconsistency');
         datasets(data_index).EEG = EEG;
+    end
+end
+
+function selection_mode = resolve_ica_selection_mode(selection_mode)
+    selection_mode = string(selection_mode);
+    if ~isscalar(selection_mode) || ...
+            ~ismember(selection_mode, ["ask", "brain", "manual"])
+        error('joint20261006:InvalidICASelectionMode', ...
+            'ica_selectionはask、brain、manualのいずれかです。');
+    end
+    if selection_mode ~= "ask"
+        return;
+    end
+    answer = questdlg( ...
+        '全被験者に使用するIC採用方式を選んでください。', ...
+        'ICA採用方式', 'Brain確率で自動', 'ICを手動選択', '中断', ...
+        'Brain確率で自動');
+    if strcmp(answer, 'Brain確率で自動')
+        selection_mode = "brain";
+    elseif strcmp(answer, 'ICを手動選択')
+        selection_mode = "manual";
+    else
+        error('joint20261006:ICASelectionCancelled', ...
+            'ICA採用方式の選択を中断しました。');
+    end
+end
+
+function [remove_mask, review_mask, removal_reasons, review_reasons] = ...
+        apply_manual_ica_selection(classification, classes, ...
+        eog_correlations, kept_components, config)
+    n_components = size(classification, 1);
+    validateattributes(kept_components, {'numeric'}, ...
+        {'vector', 'real', 'finite', 'integer', 'nonempty', ...
+         '>=', 1, '<=', n_components}, mfilename, 'kept_components');
+    if numel(unique(kept_components)) ~= numel(kept_components)
+        error('joint20261006:DuplicateManualIC', ...
+            '採用IC番号が重複しています。');
+    end
+    [suggested_remove, ~, ~, ~] = ...
+        choose_brain_components(classification, classes, ...
+            eog_correlations, config, true);
+    remove_mask = ~ismember((1:n_components)', kept_components(:));
+    eog_correlations = eog_correlations(:);
+    review_mask = ~remove_mask & (suggested_remove | ...
+        ~isfinite(eog_correlations) | ...
+        abs(eog_correlations) >= config.eog_correlation_threshold);
+    removal_reasons = strings(n_components, 1);
+    review_reasons = strings(n_components, 1);
+    removal_reasons(remove_mask) = "手動除去（ユーザーが採用しなかったIC）";
+    for index = find(~remove_mask(:) & suggested_remove(:))'
+        review_reasons(index) = append_reason(review_reasons(index), ...
+            '手動採用（Brain自動基準を満たさないIC）');
+    end
+    for index = find(review_mask(:))'
+        if ~isfinite(eog_correlations(index))
+            reason = 'EOG相関未評価（手動採用）';
+        elseif abs(eog_correlations(index)) >= config.eog_correlation_threshold
+            reason = sprintf('EOG|r|=%.3f>=%.2f（手動採用）', ...
+                abs(eog_correlations(index)), config.eog_correlation_threshold);
+        else
+            continue;
+        end
+        review_reasons(index) = append_reason(review_reasons(index), reason);
+    end
+end
+
+function kept_components = select_manual_ica_components(merged, training, ...
+        classification, classes, eog_correlations, suggested_components, ...
+        output_root, config)
+    n_components = size(classification, 1);
+    activity = double(training.icaweights * training.icasphere * ...
+        training.data(training.icachansind, :));
+    [spectrum, spectrum_freqs] = spectopo(activity, ...
+        0, training.srate, 'plot', 'off');
+    [~, subject_name] = fileparts(fileparts(char(output_root)));
+    % 主解析用SETのbasenameではなく、被験者フォルダ名を表示する。
+    screen_size = get(groot, 'ScreenSize');
+    figure_size = [min(1450, screen_size(3) - 100), ...
+        min(800, screen_size(4) - 130)];
+    fig = figure('Name', ['採用ICの手動選択: ' subject_name], ...
+        'NumberTitle', 'off', 'Color', 'w', 'MenuBar', 'none', ...
+        'ToolBar', 'none', 'Visible', config.manual_ica_figure_visible, ...
+        'Units', 'pixels', 'Position', [50 50 figure_size], ...
+        'CloseRequestFcn', @cancel_selection, ...
+        'Tag', 'JointManualICASelection');
+    cleanup = onCleanup(@() close_ica_selection_figure(fig));
+    current_component = 1;
+    column_names = [{'採用', 'IC'}, cellstr(classes(:)'), {'EOG r'}];
+    rows = cell(n_components, numel(column_names));
+    rows(:, 1) = num2cell(ismember((1:n_components)', suggested_components));
+    rows(:, 2) = num2cell((1:n_components)');
+    rows(:, 3:2 + numel(classes)) = num2cell(round(100 * classification, 2));
+    rows(:, end) = num2cell(round(eog_correlations(:), 3));
+    uicontrol(fig, 'Style', 'text', 'Units', 'normalized', ...
+        'Position', [0.02 0.92 0.96 0.065], 'BackgroundColor', 'w', ...
+        'HorizontalAlignment', 'left', 'FontSize', 11, ...
+        'String', sprintf([ ...
+        '%s: 採用するICにチェック（確率は%%表示）。行をクリックすると下にQCを表示。\n' ...
+        'Brain >= %.1f%%は初期候補のみ。最終チェックを全条件に共通適用します。'], ...
+        subject_name, 100 * config.brain_keep_threshold));
+    component_table = uitable(fig, 'Units', 'normalized', ...
+        'Position', [0.02 0.53 0.96 0.38], 'Data', rows, ...
+        'ColumnName', column_names, 'RowName', [], ...
+        'ColumnEditable', [true, false(1, numel(column_names) - 1)], ...
+        'ColumnWidth', [{60, 45}, repmat({125}, 1, numel(classes)), {90}], ...
+        'CellSelectionCallback', @select_row, 'Tag', 'ManualICAComponentTable');
+    ax_map = axes('Parent', fig, 'Position', [0.03 0.10 0.24 0.34]);
+    ax_spectrum = axes('Parent', fig, 'Position', [0.36 0.10 0.27 0.34]);
+    ax_activity = axes('Parent', fig, 'Position', [0.71 0.10 0.27 0.34]);
+    uicontrol(fig, 'Style', 'pushbutton', 'String', 'EEGLAB IC詳細', ...
+        'Units', 'normalized', 'Position', [0.02 0.46 0.16 0.05], ...
+        'Callback', @open_component_properties);
+    uicontrol(fig, 'Style', 'pushbutton', 'String', 'このICで解析を続行', ...
+        'Units', 'normalized', 'Position', [0.64 0.46 0.18 0.05], ...
+        'Callback', @confirm_selection, 'Tag', 'ConfirmManualICA');
+    uicontrol(fig, 'Style', 'pushbutton', 'String', 'この被験者を中断', ...
+        'Units', 'normalized', 'Position', [0.84 0.46 0.14 0.05], ...
+        'Callback', @cancel_selection, 'Tag', 'CancelManualICA');
+    setappdata(fig, 'SelectionConfirmed', false);
+    try
+        draw_component(1);
+        drawnow;
+        uiwait(fig);
+    catch ME
+        close_ica_selection_figure(fig);
+        clear cleanup;
+        rethrow(ME);
+    end
+    if ~isgraphics(fig) || ~getappdata(fig, 'SelectionConfirmed')
+        close_ica_selection_figure(fig);
+        clear cleanup;
+        error('joint20261006:ManualICASelectionCancelled', ...
+            '%sのIC手動選択を中断しました。自動選択には切り替えません。', ...
+            subject_name);
+    end
+    final_rows = get(component_table, 'Data');
+    kept_components = find(cell2mat(final_rows(:, 1)))';
+    clear cleanup;
+
+    function select_row(~, event)
+        if isempty(event.Indices), return; end
+        current_component = event.Indices(1, 1);
+        draw_component(current_component);
+    end
+
+    function draw_component(index)
+        cla(ax_map);
+        axes(ax_map);
+        topoplot(merged.icawinv(:, index), ...
+            merged.chanlocs(merged.icachansind), ...
+            'electrodes', 'on', 'style', 'both', 'headrad', 0.5);
+        title(ax_map, sprintf('IC %d: 頭皮分布', index));
+        plot(ax_spectrum, spectrum_freqs, spectrum(index, :), 'LineWidth', 1.2);
+        xlim(ax_spectrum, [1, min(config.ica_lowpass_hz, training.srate / 2)]);
+        grid(ax_spectrum, 'on');
+        xlabel(ax_spectrum, 'Hz'); ylabel(ax_spectrum, 'Power (dB)');
+        title(ax_spectrum, sprintf('IC %d: スペクトル', index));
+        count = min(size(activity, 2), round(10 * training.srate));
+        plot(ax_activity, (0:count - 1) / training.srate, activity(index, 1:count));
+        grid(ax_activity, 'on');
+        xlabel(ax_activity, '時間 (s)'); ylabel(ax_activity, 'IC activation');
+        title(ax_activity, sprintf('IC %d: 学習用データ先頭10秒', index));
+    end
+
+    function open_component_properties(~, ~)
+        % winhandle=NaN: 詳細図では採否を変更せず、チェック欄に一本化する。
+        pop_prop(merged, 0, current_component, NaN, ...
+            {'freqrange', [1, min(config.ica_lowpass_hz, merged.srate / 2)]});
+    end
+
+    function confirm_selection(~, ~)
+        data = get(component_table, 'Data');
+        if ~any(cell2mat(data(:, 1)))
+            errordlg('少なくとも1つのICを採用してください。', ...
+                '採用ICがありません', 'modal');
+            return;
+        end
+        setappdata(fig, 'SelectionConfirmed', true);
+        uiresume(fig);
+    end
+
+    function cancel_selection(~, ~)
+        setappdata(fig, 'SelectionConfirmed', false);
+        uiresume(fig);
+    end
+end
+
+function close_ica_selection_figure(fig)
+    if isgraphics(fig)
+        delete(fig);
     end
 end
 
@@ -624,9 +1162,10 @@ end
 
 function [label, value, is_green] = parse_condition_name(base_name)
     base_name = string(base_name);
-    is_green = contains(base_name, "緑なし", 'IgnoreCase', true);
+    is_green = contains(base_name, "緑なし") || ...
+        contains(base_name, "NoGreen", 'IgnoreCase', true);
     if is_green
-        label = "緑なし";
+        label = "NoGreen";
         value = NaN;
         return;
     end
@@ -675,12 +1214,54 @@ function [merged, segment_starts, segment_stops] = ...
     merged.xmin = 0;
     merged.xmax = (merged.pnts - 1) / merged.srate;
     merged.times = (0:merged.pnts - 1) / merged.srate * 1000;
-    merged.event = struct([]);
+    % 連結ICA用には不連続点だけを引き継ぐ。Saccade等の解析イベントは
+    % 元の各datasetsに残し、ICA適用後の条件別エポック化でそのまま使う。
+    merged.event = struct('type', {}, 'latency', {}, 'duration', {});
+    for data_index = 1:n_datasets
+        EEG = datasets(data_index).EEG;
+        types = event_types_as_strings(EEG.event);
+        boundary_indices = union(find(strcmpi(types, "boundary")), ...
+            eeg_findboundaries(EEG));
+        for event_index = boundary_indices(:)'
+            source_event = EEG.event(event_index);
+            latency = double(source_event.latency);
+            if ~isscalar(latency) || ~isfinite(latency) || ...
+                    latency < 0.5 || latency > EEG.pnts + 0.5
+                error('joint20261006:InvalidBoundaryLatency', ...
+                    '条件%dのboundary位置が不正です。入力SETを確認してください。', ...
+                    data_index);
+            end
+            duration = 0;
+            if isfield(source_event, 'duration') && ...
+                    ~isempty(source_event.duration)
+                duration = double(source_event.duration);
+            end
+            if ~isscalar(duration) || ...
+                    ~(isnan(duration) || (isfinite(duration) && duration >= 0))
+                error('joint20261006:InvalidBoundaryDuration', ...
+                    '条件%dのboundary durationが不正です。', data_index);
+            end
+            merged.event(end + 1) = struct('type', 'boundary', ...
+                'latency', latency + segment_starts(data_index) - 1, ...
+                'duration', duration);
+        end
+        if data_index > 1
+            % EEGLAB pop_mergesetと同じ半サンプル位置・NaN duration。
+            % 実際のデータを追加・削除せず、接続点を不連続として区切る。
+            merged.event(end + 1) = struct('type', 'boundary', ...
+                'latency', segment_starts(data_index) - 0.5, ...
+                'duration', NaN);
+        end
+    end
+    if ~isempty(merged.event)
+        [~, event_order] = sort([merged.event.latency]);
+        merged.event = merged.event(event_order);
+    end
     merged.urevent = struct([]);
     merged.epoch = [];
     merged.setname = '全条件連結_共通ICA';
     merged = clear_ica_fields(merged);
-    merged = eeg_checkset(merged);
+    merged = eeg_checkset(merged, 'eventconsistency');
 end
 
 function correlations = calculate_eog_correlations(ica_activity, eog)
@@ -700,34 +1281,19 @@ function correlations = calculate_eog_correlations(ica_activity, eog)
 end
 
 function [remove_mask, review_mask, removal_reasons, ...
-        review_reasons] = choose_artifact_components( ...
-        classification, classes, eog_correlations, config)
+        review_reasons] = choose_brain_components( ...
+        classification, classes, eog_correlations, config, allow_empty)
+    if nargin < 5
+        allow_empty = false;
+    end
     n_components = numel(eog_correlations);
-    remove_mask = false(n_components, 1);
     removal_reasons = strings(n_components, 1);
     review_reasons = strings(n_components, 1);
     if isempty(classification) || ...
-            size(classification, 1) ~= n_components
+            size(classification, 1) ~= n_components || ...
+            size(classification, 2) ~= numel(classes)
         error('run_joint_ica_cwt_band_analysis:InvalidICLabelOutput', ...
-            'ICLabelの成分数が共通ICAの成分数と一致しません。');
-    end
-    for class_index = 1:numel(config.artifact_remove_class_names)
-        class_name = config.artifact_remove_class_names(class_index);
-        probability_column = find(strcmpi(classes, class_name), 1);
-        if isempty(probability_column)
-            continue;
-        end
-        class_probability = classification(:, probability_column);
-        class_hit = isfinite(class_probability) & ...
-            class_probability >= config.artifact_remove_threshold;
-        remove_mask = remove_mask | class_hit;
-        for component_index = find(class_hit(:))'
-            removal_reasons(component_index) = append_reason( ...
-                removal_reasons(component_index), sprintf( ...
-                '%s=%.3f>=%.2f', class_name, ...
-                class_probability(component_index), ...
-                config.artifact_remove_threshold));
-        end
+            'ICLabelの成分数またはクラス数が一致しません。');
     end
 
     brain_column = find(strcmpi(classes, "Brain"), 1);
@@ -737,24 +1303,27 @@ function [remove_mask, review_mask, removal_reasons, ...
     end
 
     brain_probability = classification(:, brain_column);
-    brain_uncertain = ~isfinite(brain_probability) | ...
-        brain_probability < config.brain_confident_threshold;
+    % 閾値ちょうども採用。Brain未評価・不正な確率は採用しない。
+    brain_evaluated = isfinite(brain_probability) & ...
+        brain_probability >= 0 & brain_probability <= 1;
+    remove_mask = ~(brain_evaluated & ...
+        brain_probability >= config.brain_keep_threshold);
+    eog_correlations = eog_correlations(:);
     eog_evaluated = isfinite(eog_correlations);
     eog_hit = eog_evaluated & abs(eog_correlations) >= ...
         config.eog_correlation_threshold;
     review_mask = ~remove_mask & ...
-        (brain_uncertain | eog_hit | ~eog_evaluated);
+        (eog_hit | ~eog_evaluated);
 
-    for component_index = find(review_mask(:) & brain_uncertain(:))'
-        if isfinite(brain_probability(component_index))
-            reason = sprintf('Brain=%.3f<%.2f（残す）', ...
+    for component_index = find(remove_mask(:))'
+        if brain_evaluated(component_index)
+            reason = sprintf('Brain=%.6f<%.6f（除去）', ...
                 brain_probability(component_index), ...
-                config.brain_confident_threshold);
+                config.brain_keep_threshold);
         else
-            reason = 'Brain未評価（残す）';
+            reason = 'Brain未評価または確率範囲外（除去）';
         end
-        review_reasons(component_index) = append_reason( ...
-            review_reasons(component_index), reason);
+        removal_reasons(component_index) = string(reason);
     end
     for component_index = find(review_mask(:) & eog_hit(:))'
         review_reasons(component_index) = append_reason( ...
@@ -774,10 +1343,11 @@ function [remove_mask, review_mask, removal_reasons, ...
             review_reasons(component_index), ...
             'EOG相関未評価（残す）');
     end
-    if all(remove_mask)
+    if all(remove_mask) && ~allow_empty
         error('run_joint_ica_cwt_band_analysis:NoComponentKept', ...
-            ['全ICが明確なアーチファクトとして除去対象になりました。' ...
-             'ICLabel判定とICA分解を確認してください。']);
+            ['Brain確率 >= %.2f%%を満たすICがありません。' ...
+             '解析を停止します。ICLabel判定・閾値・ICA分解を確認してください。'], ...
+            100 * config.brain_keep_threshold);
     end
 end
 
@@ -811,12 +1381,21 @@ function save_joint_ica_qc(merged, training, report, ...
     review = ismember(component, report.ReviewComponents(:));
     removed = ismember(component, report.RemovedComponents(:));
     ica_seed = repmat(report.ICASeed, n_components, 1);
+    brain_keep_threshold = repmat(report.BrainKeepThreshold, n_components, 1);
+    brain_suggestion_threshold = repmat(report.BrainSuggestionThreshold, n_components, 1);
+    selection_method = repmat(report.SelectionMethod, n_components, 1);
+    selection_mode = repmat(report.SelectionMode, n_components, 1);
+    suggested_kept = ismember(component, report.SuggestedKeptComponents(:));
     report_table = table(component, dominant_class, ...
         dominant_probability, report.EOGCorrelations(:), kept, review, ...
-        removed, ica_seed, report.ReviewReason(:), report.RemovalReason(:), ...
+        removed, ica_seed, brain_keep_threshold, selection_method, ...
+        selection_mode, suggested_kept, brain_suggestion_threshold, ...
+        report.ReviewReason(:), report.RemovalReason(:), ...
         'VariableNames', {'IC', 'DominantClass', ...
         'DominantProbability', 'EOGCorrelation', 'Kept', 'Review', ...
-        'Removed', 'ICASeed', 'ReviewReason', 'RemovalReason'});
+        'Removed', 'ICASeed', 'BrainKeepThreshold', 'SelectionMethod', ...
+        'SelectionMode', 'AutomaticallySuggestedKept', 'BrainSuggestionThreshold', ...
+        'ReviewReason', 'RemovalReason'});
     for class_index = 1:numel(report.Classes)
         variable_name = matlab.lang.makeUniqueStrings( ...
             matlab.lang.makeValidName(report.Classes(class_index)), ...
@@ -864,9 +1443,11 @@ function save_joint_ica_qc(merged, training, report, ...
                 decision_mark = " [要確認・採用]";
             end
             map_title = title(ax_map, sprintf( ...
-                'IC %d: %s %.1f%% / EOG r=%.3f%s', ...
+                'IC %d: %s %.1f%% / Brain %.1f%% / EOG r=%.3f%s', ...
                 component_index, dominant_class(component_index), ...
                 100 * dominant_probability(component_index), ...
+                100 * report.Classification(component_index, ...
+                    find(strcmpi(report.Classes, "Brain"), 1)), ...
                 report.EOGCorrelations(component_index), decision_mark), ...
                 'Interpreter', 'none');
             map_title.Color = 'k';
@@ -889,14 +1470,19 @@ function save_joint_ica_qc(merged, training, report, ...
             set(ax_spectrum, 'Color', 'w', ...
                 'XColor', 'k', 'YColor', 'k');
         end
+        criterion_label = 'Brain採用基準';
+        if report.SelectionMode == "manual"
+            criterion_label = '手動選択 / Brain初期候補';
+        end
         overall_title = sgtitle(fig, sprintf( ...
             ['全条件共通ICA: 採用IC = %s（要確認 = %s）/ 除去IC = %s' ...
-             '（seed=%u、明確なアーチファクト >= %.0f%%だけを自動除去）'], ...
+             '（seed=%u、%s >= %.2f%%）'], ...
             mat2str(report.KeptComponents), ...
             mat2str(report.ReviewComponents), ...
             mat2str(report.RemovedComponents), ...
             report.ICASeed, ...
-            100 * config.artifact_remove_threshold), ...
+            criterion_label, ...
+            100 * config.brain_keep_threshold), ...
             'Interpreter', 'none');
         overall_title.Color = 'k';
         print_figure_png(fig, ...
@@ -948,19 +1534,6 @@ function [manifest, results] = analyze_all_conditions( ...
                 compute_newtimef_trial_ersp(EEG_epoch, ...
                     channel_index, config);
             [~, ersp_sem, ersp_n] = mean_sem_over_trials(trial_ersp);
-
-            % 04: 元のnewtimefグリッドを明示的な共通グリッドとして使用。
-            % 現設定では通常、全条件の軸は一致するため値は変わらない。
-            target_freqs = freqs;
-            target_times = times;
-            ersp_mean = interpolate_ersp_linear( ...
-                ersp_mean, freqs, times, target_freqs, target_times);
-            ersp_sem = interpolate_ersp_linear( ...
-                ersp_sem, freqs, times, target_freqs, target_times);
-            trial_ersp = interpolate_ersp_trials_linear( ...
-                trial_ersp, freqs, times, target_freqs, target_times);
-            freqs = target_freqs;
-            times = target_times;
 
             band_stats = calculate_trial_band_statistics( ...
                 trial_ersp, freqs, times, config);
@@ -1018,6 +1591,15 @@ function [manifest, results] = analyze_all_conditions( ...
                 'band_summary', '-v7');
             band_table = build_band_timecourse_table( ...
                 band_stats, times, dataset, channel_name, config);
+            % 06のERSP CSVは、列番号ではなく変数名で不要列を削除する。
+            % これにより、列タイトルと各列の値の対応を維持する。
+            columns_to_remove = intersect( ...
+                {'SourceSET', 'BandLabelJapanese', 'Interpretation'}, ...
+                band_table.Properties.VariableNames, 'stable');
+            if ~isempty(columns_to_remove)
+                band_table(:, columns_to_remove) = [];
+            end
+            % Band列にはDelta/Theta/Alpha/...が入る。
             writetable(band_table, band_csv, 'Encoding', 'UTF-8');
 
             create_newtimef_figure(times, freqs, ersp_mean, ...
@@ -1047,6 +1629,7 @@ function [manifest, results] = analyze_all_conditions( ...
                 dataset.RawSaccadeEvents, dataset.DuplicatesRemoved, ...
                 EEG_epoch.trials, config.ica_seed, ...
                 config.ersp_color_limit_db, ...
+                joint_report.BrainKeepThreshold, joint_report.SelectionMethod, ...
                 string(mat2str(joint_report.KeptComponents)), ...
                 string(mat2str(joint_report.ReviewComponents)), ...
                 string(mat2str(joint_report.RemovedComponents)), ...
@@ -1056,6 +1639,7 @@ function [manifest, results] = analyze_all_conditions( ...
                 'ConditionValueHz', 'IsGreenNoLED', 'Channel', ...
                 'RawSaccadeEvents', 'DuplicateEventsRemoved', ...
                 'NewtimefTrials', 'ICASeed', 'ERSPDisplayMaxDb', ...
+                'BrainKeepThreshold', 'ICASelectionMethod', ...
                 'CommonKeptICs', 'CommonReviewICs', ...
                 'CommonRemovedICs', 'ERSPMAT', 'ERSPPNG', ...
                 'BandMAT', 'BandPNG', 'BandCSV'});
@@ -1434,12 +2018,12 @@ function manifest = create_cwt_difference_outputs( ...
     is_green = reshape([results.IsGreen], [], 1);
     green_indices = find(is_green);
     if isempty(green_indices)
-        fprintf('  緑なし条件がないためERSP差分を省略します。\n');
+        fprintf('  NoGreen条件がないためERSP差分を省略します。\n');
         return;
     end
     if numel(green_indices) > 1
         warning('run_joint_ica_cwt_band_analysis:MultipleGreenCWT', ...
-            '緑なし条件が複数あるためERSP差分を一意に作成できません。');
+            'NoGreen条件が複数あるためERSP差分を一意に作成できません。');
         return;
     end
 
@@ -1455,50 +2039,36 @@ function manifest = create_cwt_difference_outputs( ...
             condition_index = condition_indices(difference_index);
             condition_channel = ...
                 results(condition_index).Channels(channel_position);
-            % 05: 緑なし条件の時間・周波数グリッドを共通グリッドにする。
-            target_freqs = green_channel.CWTFrequencies;
-            target_times = green_channel.CWTTimes;
-            condition_mean = interpolate_ersp_linear( ...
-                condition_channel.CWTMean, ...
-                condition_channel.CWTFrequencies, ...
-                condition_channel.CWTTimes, target_freqs, target_times);
-            condition_sem = interpolate_ersp_linear( ...
-                condition_channel.CWTSEM, ...
-                condition_channel.CWTFrequencies, ...
-                condition_channel.CWTTimes, target_freqs, target_times);
-            green_mean = interpolate_ersp_linear( ...
-                green_channel.CWTMean, green_channel.CWTFrequencies, ...
-                green_channel.CWTTimes, target_freqs, target_times);
-            green_sem = interpolate_ersp_linear( ...
-                green_channel.CWTSEM, green_channel.CWTFrequencies, ...
-                green_channel.CWTTimes, target_freqs, target_times);
-
-            difference_ersp_mean = condition_mean - green_mean;
-            difference_ersp_sem = sqrt(condition_sem .^ 2 + green_sem .^ 2);
+            % 05と06の両方で事前検証した同一軸上で差分を計算する。
+            difference_ersp_mean = condition_channel.CWTMean - ...
+                green_channel.CWTMean;
+            difference_ersp_sem = sqrt( ...
+                condition_channel.CWTSEM .^ 2 + ...
+                green_channel.CWTSEM .^ 2);
             condition_n = condition_channel.CWTN;
             green_n = green_channel.CWTN;
-            freqs = target_freqs;
-            times = target_times;
+            freqs = green_channel.CWTFrequencies;
+            times = green_channel.CWTTimes;
 
             % 旧run_ersp_band_timecourseが読み込める互換変数名。
             ersp = difference_ersp_mean;
             condition_source_set = results(condition_index).SourceSET;
             green_source_set = results(green_index).SourceSET;
             condition_label = results(condition_index).ConditionLabel;
-            difference_label = condition_label + " - 緑なし";
+            difference_label = condition_label + " - NoGreen";
             analysis_config = config;
             metadata = struct( ...
                 'method', ...
                 "Common-ICA contrast; one 0.5-200 Hz conventional newtimef mean", ...
                 'equation', "condition ERSP mean - green-no-LED ERSP mean", ...
                 'sem_method', "sqrt(condition SEM^2 + green SEM^2)", ...
-                'interpolation', "linear in time and frequency onto green-no-LED grid", ...
+                'interpolation', "none; matching condition axes required", ...
                 'interpretation_note', ...
                 "newtimef ERSP後の条件差であり、生波形から眼球運動を物理的に除去したものではない");
 
             safe_base = safe_filename(results(condition_index).BaseName);
             file_stem = safe_base + "_" + channel_name + ...
-                "_共通ICA_newtimef_ERSP_緑なし差分";
+                "_共通ICA_newtimef_ERSP_NoGreen差分";
             output_mat = fullfile(channel_folder, file_stem + ".mat");
             output_png = fullfile(channel_folder, file_stem + ".png");
             save(output_mat, 'ersp', 'difference_ersp_mean', ...
@@ -1523,51 +2093,46 @@ function manifest = create_cwt_difference_outputs( ...
     end
 end
 
-function output = interpolate_ersp_linear(input, freqs, times, ...
-        target_freqs, target_times)
-%INTERPOLATE_ERSP_LINEAR 2次元ERSPを周波数・時間の両方向に線形補間。
-% inputの行は周波数、列は時間。外挿領域はNaNとする。
-    input = double(input);
-    freqs = double(freqs(:));
-    times = double(times(:)');
-    target_freqs = double(target_freqs(:));
-    target_times = double(target_times(:)');
-    if size(input, 1) ~= numel(freqs) || size(input, 2) ~= numel(times)
-        error('interpolate_ersp_linear:SizeMismatch', ...
-            'ERSP配列と時間・周波数軸のサイズが一致しません。');
+function validate_all_result_axes(results, config)
+%VALIDATE_ALL_RESULT_AXES 05と06の全条件を同一グリッドに限定する。
+    if isempty(results)
+        return;
     end
-    [T, F] = meshgrid(times, freqs);
-    [Tq, Fq] = meshgrid(target_times, target_freqs);
-    output = interp2(T, F, input, Tq, Fq, 'linear', NaN);
-end
-
-function output = interpolate_ersp_trials_linear(input, freqs, times, ...
-        target_freqs, target_times)
-%INTERPOLATE_ERSP_TRIALS_LINEAR 試行ごとに2次元線形補間を適用。
-    n_trials = size(input, 3);
-    output = nan(numel(target_freqs), numel(target_times), n_trials);
-    for trial_index = 1:n_trials
-        output(:, :, trial_index) = interpolate_ersp_linear( ...
-            input(:, :, trial_index), freqs, times, ...
-            target_freqs, target_times);
+    reference_index = find(reshape([results.IsGreen], [], 1), 1);
+    if isempty(reference_index)
+        reference_index = 1;
+    end
+    for channel_position = 1:numel(config.analysis_channels)
+        channel_name = config.analysis_channels(channel_position);
+        reference_channel = ...
+            results(reference_index).Channels(channel_position);
+        for condition_index = 1:numel(results)
+            condition_channel = ...
+                results(condition_index).Channels(channel_position);
+            validate_cwt_difference_axes(condition_channel, ...
+                reference_channel, ...
+                results(condition_index).ConditionLabel, ...
+                results(reference_index).ConditionLabel, channel_name);
+        end
     end
 end
 
-function validate_cwt_difference_axes(condition_channel, green_channel, ...
-        condition_label, channel_name)
+function validate_cwt_difference_axes(condition_channel, reference_channel, ...
+        condition_label, reference_label, channel_name)
     same_frequencies = isequal(size(condition_channel.CWTFrequencies), ...
-        size(green_channel.CWTFrequencies)) && all(abs( ...
+        size(reference_channel.CWTFrequencies)) && all(abs( ...
         condition_channel.CWTFrequencies(:) - ...
-        green_channel.CWTFrequencies(:)) < 1e-9);
+        reference_channel.CWTFrequencies(:)) < 1e-9);
     same_times = isequal(size(condition_channel.CWTTimes), ...
-        size(green_channel.CWTTimes)) && all(abs( ...
-        condition_channel.CWTTimes(:) - green_channel.CWTTimes(:)) < 1e-9);
+        size(reference_channel.CWTTimes)) && all(abs( ...
+        condition_channel.CWTTimes(:) - ...
+        reference_channel.CWTTimes(:)) < 1e-9);
     same_data_size = isequal(size(condition_channel.CWTMean), ...
-        size(green_channel.CWTMean));
+        size(reference_channel.CWTMean));
     if ~(same_frequencies && same_times && same_data_size)
-        error('run_joint_ica_cwt_band_analysis:CWTDifferenceAxisMismatch', ...
-            '%s / %sのERSP軸が緑なし条件と一致しません。', ...
-            condition_label, channel_name);
+        error('run_joint_ica_newtimef_band_analysis:ERSPAxisMismatch', ...
+            '%s / %sのERSP軸が基準条件%sと一致しません。', ...
+            condition_label, channel_name, reference_label);
     end
 end
 
@@ -1618,12 +2183,12 @@ function create_all_channel_overlays(results, output_root, config)
 
         green_indices = find(is_green_noled);
         if isempty(green_indices)
-            fprintf('    %s: 緑なしがないため差分重ね描きを省略。\n', ...
+            fprintf('    %s: NoGreenがないため差分重ね描きを省略。\n', ...
                 channel_name);
             continue;
         elseif numel(green_indices) > 1
             warning('run_joint_ica_cwt_band_analysis:MultipleGreen', ...
-                '%sには緑なしが複数あるため差分を一意に作れません。', ...
+                '%sにはNoGreenが複数あるため差分を一意に作れません。', ...
                 output_root);
             continue;
         end
@@ -1651,16 +2216,16 @@ function create_all_channel_overlays(results, output_root, config)
             green_n(difference_index, :, :) = ...
                 raw_n(green_index, :, :);
             difference_labels(difference_index) = ...
-                condition_labels(condition_index) + " - 緑なし";
+                condition_labels(condition_index) + " - NoGreen";
             difference_source_sets(difference_index) = ...
                 source_sets(condition_index);
         end
         difference_png = fullfile(channel_folder, ...
-            '条件-緑なし_帯域ERSP差分重ね描き_SEM.png');
+            '条件-NoGreen_帯域ERSP差分重ね描き_SEM.png');
         difference_mat = fullfile(channel_folder, ...
-            '条件-緑なし_帯域ERSP差分重ね描き_SEM.mat');
+            '条件-NoGreen_帯域ERSP差分重ね描き_SEM.mat');
         difference_csv = fullfile(channel_folder, ...
-            '条件-緑なし_帯域ERSP差分重ね描き_SEM.csv');
+            '条件-NoGreen_帯域ERSP差分重ね描き_SEM.csv');
         create_overlay_figure(times, ...
             difference_mean, difference_labels, ...
             channel_name, difference_png, config, true);
@@ -1745,9 +2310,9 @@ function create_overlay_figure(times, mean_array, labels, ...
             'Color', 'w', 'XColor', 'k', 'YColor', 'k');
     end
     if is_difference
-        quantity = '条件 - 緑なし';
+        quantity = '条件 - NoGreen';
     else
-        quantity = '0・80・160・緑なし等の全条件';
+        quantity = '0・80・160・NoGreen等の全条件';
     end
     layout_title = title(layout, sprintf( ...
         '%s: %s 帯域ERSP重ね描き（線 = 試行平均）', ...

@@ -8,22 +8,15 @@
 % 5. 生データ(.set)の保存 (CWTなどの広帯域解析へ接続可能)
 % =================================================================
 
-input_dir = uigetdir('', '生データ(CSV)が含まれるフォルダを選択してください');
-if input_dir == 0
+selected_root = uigetdir('', ...
+    '01_生データ、被験者フォルダ、または被験者一覧フォルダを選択');
+if isequal(selected_root, 0)
     error('フォルダが選択されなかったため, 処理を中断した.'); 
 end
-
-[parent_dir, ~, ~] = fileparts(input_dir);
-output_dir = fullfile(parent_dir, '02_サッケード自動検出');
-if ~exist(output_dir, 'dir')
-    mkdir(output_dir); 
-end
-
-files = dir(fullfile(input_dir, '*.csv'));
-if isempty(files)
-    error('指定されたディレクトリにCSVファイルが存在しない.'); 
-end
-fprintf('合計 %d 個のCSVファイルを処理する.\n', length(files));
+addpath(fileparts(mfilename('fullpath')), '-end');
+input_dirs = pae_select_subject_input_dirs( ...
+    selected_root, '01_生データ', '.csv');
+fprintf('対象被験者フォルダ: %d 件\n', numel(input_dirs));
 
 if ~exist('eeglab', 'file')
     error('EEGLABのパスが通っていない. パスを追加してから再実行すること.');
@@ -48,6 +41,16 @@ MAX_EEG_P2P_THRESHOLD = 200.0; % 200 uV
 MIN_STEP_AMP_THRESHOLD = 130.0; % 130 uV
 
 % =================================================================
+for subject_index = 1:numel(input_dirs)
+input_dir = char(input_dirs(subject_index));
+[parent_dir, ~, ~] = fileparts(input_dir);
+output_dir = fullfile(parent_dir, '02_サッケード自動検出');
+if ~exist(output_dir, 'dir')
+    mkdir(output_dir);
+end
+files = dir(fullfile(input_dir, '*.csv'));
+fprintf('\n=== 被験者 %d/%d: %s（CSV %d件）===\n', ...
+    subject_index, numel(input_dirs), parent_dir, numel(files));
 for f = 1:length(files)
     file_path = fullfile(files(f).folder, files(f).name);
     [~, base_name, ~] = fileparts(files(f).name);
@@ -257,5 +260,6 @@ for f = 1:length(files)
     [ALLEEG, EEG, CURRENTSET] = eeg_store(ALLEEG, EEG, 0); 
     save_filename = [base_name '.set'];
     EEG = pop_saveset(EEG, 'filename', save_filename, 'filepath', output_dir, 'savemode', 'onefile');
+end
 end
 fprintf('\n=== 全データの検出および【生データへのOnsetイベント登録】が完了した ===\n');
