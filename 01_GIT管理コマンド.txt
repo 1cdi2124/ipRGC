@@ -1,0 +1,22 @@
+https://github.com/1cdi2124/ipRGC
+
+cd "C:\Users\tatsuya\学校法人東海大学\高雄研　データ共有 - 光瞳孔反射研究プロジェクト\02瞳孔研究2025\05Phantom Array Effect\04　解析実行コード"
+git add .
+git commit -m "変更内容の説明"
+git push
+
+# 作業前。他のPCなどが更新した履歴を取得（未保存の編集がある場合は先にcommit）
+git pull --ff-only
+
+# MATLAB等で編集後、差分と対象を確認
+git status
+git diff
+
+# 変更したファイルを指定して記録・送信（ファイル名は例）
+git add -- run_joint_ica_newtimef_band_analysis.m
+git diff --cached
+git commit -m "解析設定を更新"
+git push
+
+# 変更履歴を確認
+git log --oneline -20
